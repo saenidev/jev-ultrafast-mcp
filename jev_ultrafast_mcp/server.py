@@ -191,6 +191,22 @@ def _error(exc: Exception) -> str:
     return f"error({type(exc).__name__}): {exc}"
 
 
+PAGE_NOTES = 4          # pages remembered per goal
+PAGE_NOTE_CHARS = 700   # of each page's text
+
+
+def _note_page_left(pages_seen: list[dict], left, now) -> None:
+    """Remember the page an action just left, once per visit, newest last and bounded."""
+    if left is None or now is None or left.url == now.url:
+        return
+    note = {"url": left.url, "title": left.title, "text": (left.text or "")[:PAGE_NOTE_CHARS]}
+    if pages_seen and pages_seen[-1]["url"] == note["url"]:
+        pages_seen[-1] = note
+    else:
+        pages_seen.append(note)
+    del pages_seen[:-PAGE_NOTES]
+
+
 def _tokens(usage: object) -> int:
     """The token count a provider reported, under whichever names it chose.
 
@@ -475,7 +491,15 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
         # The stall count belongs to a run, not to the session: a goal that
         # inherited the previous goal's count would call itself stuck on step 1.
         tab.reset_progress()
-        valueless_at: dict[int, str] = {}  # this run's no-value steps -> page URL
+        # This goal's own steps start here. The model is told not to repeat satisfied steps, so
+        # showing it the previous goal's "Add to cart" made it report a new "add this too" goal
+        # DONE the moment it reached the product page. What earlier goals did is on the page.
+        run_start = len(tab.history)
+        # Short notes on the pages this goal has already left. The decision model sees only the
+        # current page, so a value read on one page (a ticket number in an article) was gone by
+        # the time the page that needed it came up.
+        pages_seen: list[dict] = []
+        valueless_at: dict[int, str] = {}  # this run's no-value and refused-Enter steps -> page URL
         started = time.perf_counter()
         if url:
             tab.navigate(url)
@@ -494,9 +518,9 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
             history = [{"op": step.op, "ref": step.ref, "target": step.target, "ok": step.ok,
                         **({"error": step.error} if step.error else {}),
                         **({"where": valueless_at[id(step)]} if id(step) in valueless_at else {})}
-                       for step in tab.history[-10:]]
+                       for step in tab.history[run_start:][-10:]]
             try:
-                decision = policy.choose(CONFIG, observation, goal, history)
+                decision = policy.choose(CONFIG, observation, goal, history, pages_seen=pages_seen)
             except policy.TurboUnavailable as exc:
                 # A provider that fails mid-run must not erase the steps already
                 # taken: those are the whole record of how far the goal got, and
@@ -582,10 +606,23 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                 f"{decision.get('target') or ''} → {'ok' if step_result['ok'] else error} "
                 f"({decision.get('latency_ms', 0)}ms model / {step_result.get('ms', 0)}ms browser)"
             )
+            if (not step_result["ok"] and operation == "SUBMIT"
+                    and error == "needs_confirmation"):
+                # Enter here would also press a guarded button (a search box sharing a form or
+                # menu with "Cancel subscription"). That is a reason not to press Enter, not a
+                # reason to abandon the goal: every visible button still answers to the click
+                # rail one by one. So the field stops being offered for SUBMIT on this page and
+                # the goal goes on; the refusal is in the trace and the history.
+                valueless_at[id(tab.history[-1])] = observation.url
+                trace.append(f"  -   Enter withdrawn here: {step_result.get('detail') or error}")
+                observation = tab.last or tab.observe()
+                continue
             if not step_result["ok"]:
                 status = f"failed:{error}"
                 break
+            left = observation
             observation = tab.last or tab.observe()
+            _note_page_left(pages_seen, left, observation)
             # `act` already counts how long the page has stood still; the loop
             # used to drop that count on the floor and keep paying one decision
             # request per step until `max_steps`. Measured on a real daily

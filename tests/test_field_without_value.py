@@ -195,7 +195,7 @@ class _Tab:
 def _drive(monkeypatch, tab, decisions, text_for):
     seen_history: list = []
 
-    def fake_choose(_cfg, _obs, _goal, history):
+    def fake_choose(_cfg, _obs, _goal, history, **_kw):
         seen_history.append(list(history))
         return decisions.pop(0) if decisions else {"operation": "DONE", "ref": None, "confidence": 1.0}
 
@@ -293,3 +293,88 @@ def test_choose_does_not_offer_typing_once_every_field_is_valueless(monkeypatch)
     assert "TYPE_TEXT" not in questions["operation"]["criteria"]
     assert "type_text_target" not in questions
     assert "CLICK" in questions["operation"]["criteria"]
+
+
+def test_a_new_goal_does_not_see_the_previous_goals_steps(monkeypatch):
+    """The model is told not to repeat satisfied steps; last goal's "Add to cart" is not this one's."""
+    add = Element(ref="e3", role="button", name="Add to cart")
+    tab = _Tab(_observation([add]))
+    from jev_ultrafast_mcp.browser import Step
+    tab.history.append(Step(op="click", ok=True, ref="e3", target="Add to cart", ms=1))
+
+    decisions = [{"operation": "DONE", "ref": None, "confidence": 0.9}]
+    _out, seen = _drive(monkeypatch, tab, decisions, lambda *_a: "x")
+
+    assert seen[0] == [], f"a fresh goal must start with an empty history, got {seen[0]}"
+
+
+def test_a_refused_enter_withdraws_submit_and_the_goal_goes_on(monkeypatch):
+    search = Element(ref="e1", role="searchbox", name="Search", editable=True, value="help")
+    go = Element(ref="e2", role="button", name="Go")
+    tab = _Tab(_observation([search, go]))
+    from jev_ultrafast_mcp.browser import Step
+
+    def act(ops, **_kw):
+        tab.acts.append(ops)
+        refused = ops[0].get("submit")
+        step = Step(op="type" if refused else ops[0]["op"], ok=not refused, ref=ops[0].get("ref"),
+                    target="Search" if refused else "Go", ms=1,
+                    error="needs_confirmation" if refused else None,
+                    detail="Enter would submit 'Cancel subscription'" if refused else None)
+        tab.history.append(step)
+        return {"ops": [step.to_dict()], "ok": not refused, "steps": len(tab.acts), "page_changed": False}
+    tab.act = act
+
+    decisions = [
+        {"operation": "SUBMIT", "ref": "e1", "target": "Search", "confidence": 0.9},
+        {"operation": "CLICK", "ref": "e2", "target": "Go", "confidence": 0.9},
+        {"operation": "DONE", "ref": None, "confidence": 0.9},
+    ]
+    out, seen = _drive(monkeypatch, tab, decisions, lambda *_a: "x")
+
+    assert "status: done" in out, out
+    assert "Enter withdrawn" in out, out
+    refused = seen[1][-1]
+    assert refused.get("error") == "needs_confirmation" and refused.get("where"), refused
+    heads = policy.withdraw_refused_submit({"SUBMIT": [search]}, seen[1], tab.last.url)
+    assert "SUBMIT" not in heads, "the refused field must stop being offered for SUBMIT here"
+    elsewhere = policy.withdraw_refused_submit({"SUBMIT": [search]}, seen[1], "https://other.example/")
+    assert elsewhere["SUBMIT"] == [search], "and only on the page where it was refused"
+
+
+def test_pages_left_behind_are_remembered_briefly():
+    from jev_ultrafast_mcp.server import PAGE_NOTES, _note_page_left
+
+    def obs(url, text):
+        o = _observation([])
+        o.url, o.text, o.title = url, text, url
+        return o
+
+    notes: list = []
+    _note_page_left(notes, obs("https://a/", "see reference ticket T-3317"), obs("https://b/", ""))
+    assert notes and "T-3317" in notes[0]["text"]
+    _note_page_left(notes, obs("https://b/", "b"), obs("https://b/", "b"))
+    assert len(notes) == 1, "an action that stays on the page is not a page left"
+    for i in range(PAGE_NOTES + 3):
+        _note_page_left(notes, obs(f"https://p{i}/", "x" * 5000), obs("https://z/", ""))
+    assert len(notes) == PAGE_NOTES and all(len(n["text"]) <= 700 for n in notes)
+
+
+def test_earlier_pages_reach_the_decision_request(monkeypatch):
+    sent = []
+
+    def fake_post(url, key, body):
+        sent.append(body)
+        ids = list(body["questions"]["operation"]["criteria"])
+        return {"answers": {"operation": {"choice": "DONE", "confidence": 1.0,
+                                          "probabilities": {n: float(n == "DONE") for n in ids}}}}
+
+    monkeypatch.setattr(policy, "_post", fake_post)
+    cfg = _text_cfg()
+    cfg.typesafe_key = "k"
+    button = Element(ref="e1", role="button", name="Close ticket")
+    notes = [{"url": "https://kb/", "title": "Resetting", "text": "reference ticket T-3317"}]
+    policy.choose(cfg, _observation([button]), "close it", [], pages_seen=notes)
+    assert sent[0]["state"]["earlier_pages"] == notes
+    policy.choose(cfg, _observation([button]), "close it", [])
+    assert "earlier_pages" not in sent[1]["state"], "no key at all when nothing was left behind"

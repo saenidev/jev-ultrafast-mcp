@@ -28,7 +28,7 @@ import { DEFAULT_THRESHOLD, pythonRepr, resolve as resolveSteps } from './macro.
  * third is held by `tests/test_helper_version.py`, because a server number above the helper's makes
  * the comparison below permanently true -- the observer is reinstalled on every call, and a page
  * carrying the shipped one is never actually upgraded. */
-export const HELPER_VERSION = 10;
+export const HELPER_VERSION = 11;
 
 /* `browser.py`'s tables, verbatim. They are data, not logic, and getting one key code wrong is a
  * keystroke that lands as the wrong character with nothing in the report to say so. */
@@ -59,6 +59,9 @@ export const NAV_KINDS = new Set(
 export const REQUIRES_REF = new Set([...CLICKABLE_KINDS, 'scroll_to', 'wait_for_ref']);
 
 /** `browser.py`'s `_key_parts` — the key name and modifier mask a combo resolves to. */
+/** `browser.py`'s `PRESS_KEYS` — keys that activate what has focus. */
+export const PRESS_KEYS = new Set(['enter', 'return', 'space']);
+
 export function keyParts(combo) {
   const parts = String(combo).replace(/-/g, '+').split('+')
     .map((part) => part.trim().toLowerCase()).filter(Boolean);
@@ -427,9 +430,29 @@ export function createSession(driver, {
   }
 
   /** `browser.py`'s `_click_refusal` — why clicking `ref` must be confirmed first, or null. */
-  function clickRefusal(ref, target) {
+  async function clickRefusal(ref, target) {
     const element = observed(ref);
-    return confirmReason(target, element ? element.role : '', confirmPatterns);
+    const role = element ? element.role : '';
+    const reason = confirmReason(target, role, confirmPatterns);
+    if (reason) return reason;
+    // Every name the button goes by: `<input type=submit value="Pay now" aria-label="Continue">`.
+    const others = await safeEval(`window.__jevMcp.pressNamesOf(${JSON.stringify(ref)})`);
+    for (const name of Array.isArray(others) ? others : []) {
+      const again = confirmReason(String(name), role, confirmPatterns);
+      if (again) return again;
+    }
+    return null;
+  }
+
+  /** `browser.py`'s `_press_refusal` — Enter/Space into whatever has focus is a click too. */
+  async function pressRefusal() {
+    const names = await safeEval('window.__jevMcp.pressTargets()');
+    if (!Array.isArray(names)) return 'cannot tell what that key would press here';
+    for (const name of names) {
+      const reason = confirmReason(String(name), 'button', confirmPatterns);
+      if (reason) return `that key would press ${pythonRepr(String(name).slice(0, 60))}, which ${reason}`;
+    }
+    return null;
   }
 
   /**
@@ -530,6 +553,12 @@ export function createSession(driver, {
     const payload = {
       key, code, windowsVirtualKeyCode: virtual, nativeVirtualKeyCode: virtual, modifiers,
     };
+    if (key === 'Enter' && !modifiers) {
+      // A bare Enter carries its "\r" text, as a keyboard's does; see `_dispatch_keys`.
+      await driver.call('Input.dispatchKeyEvent', { type: 'keyDown', text: '\r', unmodifiedText: '\r', ...payload });
+      await driver.call('Input.dispatchKeyEvent', { type: 'keyUp', ...payload });
+      return;
+    }
     await driver.call('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...payload });
     await driver.call('Input.dispatchKeyEvent', { type: 'keyUp', ...payload });
   }
@@ -627,7 +656,7 @@ export function createSession(driver, {
 
       if (op === 'click') {
         target = await labelOf(ref);
-        const blocked = clickRefusal(ref, target);
+        const blocked = await clickRefusal(ref, target);
         if (blocked && !rawOp.confirm) {
           return stepOf({ op, ref, target, ok: false, error: 'needs_confirmation',
             detail: `${blocked}; re-send with "confirm": true to proceed` });
@@ -642,7 +671,10 @@ export function createSession(driver, {
           return stepOf({ op, ref, target, ok: false, error: 'needs_confirmation',
             detail: 'field looks sensitive; re-send with "confirm": true' });
         }
-        if (rawOp.submit) {
+        const typed = String(rawOp.text === undefined || rawOp.text === null ? '' : rawOp.text);
+        // `slow` sends each character as a key press, so a line break in the text is an Enter.
+        const enters = Boolean(rawOp.slow) && /[\r\n]/.test(typed);
+        if (rawOp.submit || enters) {
           const blocked = await submitRefusal(ref);
           if (blocked && !rawOp.confirm) {
             return stepOf({ op, ref, target, ok: false, error: 'needs_confirmation',
@@ -685,7 +717,7 @@ export function createSession(driver, {
           return stepOf({ op, ref, ok: true, detail: 'already in requested state' });
         }
         target = await labelOf(ref);
-        const blocked = clickRefusal(ref, target);
+        const blocked = await clickRefusal(ref, target);
         if (blocked && !rawOp.confirm) {
           return stepOf({ op, ref, target, ok: false, error: 'needs_confirmation',
             detail: `${blocked}; re-send with "confirm": true to proceed` });
@@ -742,6 +774,13 @@ export function createSession(driver, {
             throw new PolicyError('keys would type into a field whose value must not leave the '
               + "page. Use `type` with the field's ref and \"confirm\": true, which records it "
               + 'as a placeholder rather than in the clear.');
+          }
+        }
+        if (keys.some((key) => PRESS_KEYS.has(keyParts(key).name)) && !rawOp.confirm) {
+          const blocked = await pressRefusal();
+          if (blocked) {
+            return stepOf({ op, ok: false, error: 'needs_confirmation',
+              detail: `${blocked}; re-send with "confirm": true to proceed` });
           }
         }
         if (dryRun) return stepOf({ op, ok: true, detail: 'dry run' });

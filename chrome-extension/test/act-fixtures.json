@@ -1081,6 +1081,34 @@
       }
     },
     {
+      "why": "slow typing a line break into a field whose form's button needs confirming",
+      "platform": "mac",
+      "op": {
+        "op": "type",
+        "ref": "e5",
+        "text": "1\r",
+        "slow": true
+      },
+      "dry_run": false,
+      "script": {
+        "label": "Amount",
+        "submitters": [
+          "Pay now"
+        ]
+      },
+      "expected": {
+        "step": {
+          "op": "type",
+          "ok": false,
+          "ref": "e5",
+          "target": "Amount",
+          "error": "needs_confirmation",
+          "detail": "Enter would submit 'Pay now', which matches confirmation rule '\\\\bpay\\\\s+now\\\\b'; re-send with \"confirm\": true to proceed"
+        },
+        "calls": []
+      }
+    },
+    {
       "why": "selecting by value",
       "platform": "mac",
       "op": {
@@ -1446,7 +1474,9 @@
           {
             "method": "Input.dispatchKeyEvent",
             "params": {
-              "type": "rawKeyDown",
+              "type": "keyDown",
+              "text": "\r",
+              "unmodifiedText": "\r",
               "key": "Enter",
               "code": "Enter",
               "windowsVirtualKeyCode": 13,
@@ -1466,6 +1496,124 @@
             }
           }
         ]
+      }
+    },
+    {
+      "why": "Enter into whatever would press a guarded button",
+      "platform": "mac",
+      "op": {
+        "op": "keys",
+        "key": "Enter"
+      },
+      "dry_run": false,
+      "script": {
+        "submitters": [
+          "Pay now"
+        ]
+      },
+      "expected": {
+        "step": {
+          "op": "keys",
+          "ok": false,
+          "error": "needs_confirmation",
+          "detail": "that key would press 'Pay now', which matches confirmation rule '\\\\bpay\\\\s+now\\\\b'; re-send with \"confirm\": true to proceed"
+        },
+        "calls": []
+      }
+    },
+    {
+      "why": "Space onto a focused guarded button",
+      "platform": "mac",
+      "op": {
+        "op": "keys",
+        "keys": [
+          "Tab",
+          "Space"
+        ]
+      },
+      "dry_run": false,
+      "script": {
+        "submitters": [
+          "Pay now"
+        ]
+      },
+      "expected": {
+        "step": {
+          "op": "keys",
+          "ok": false,
+          "error": "needs_confirmation",
+          "detail": "that key would press 'Pay now', which matches confirmation rule '\\\\bpay\\\\s+now\\\\b'; re-send with \"confirm\": true to proceed"
+        },
+        "calls": []
+      }
+    },
+    {
+      "why": "the same Enter, confirmed",
+      "platform": "mac",
+      "op": {
+        "op": "keys",
+        "key": "Enter",
+        "confirm": true
+      },
+      "dry_run": false,
+      "script": {
+        "submitters": [
+          "Pay now"
+        ]
+      },
+      "expected": {
+        "step": {
+          "op": "keys",
+          "ok": true,
+          "target": "Enter"
+        },
+        "calls": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "text": "\r",
+              "unmodifiedText": "\r",
+              "key": "Enter",
+              "code": "Enter",
+              "windowsVirtualKeyCode": 13,
+              "nativeVirtualKeyCode": 13,
+              "modifiers": 0
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "key": "Enter",
+              "code": "Enter",
+              "windowsVirtualKeyCode": 13,
+              "nativeVirtualKeyCode": 13,
+              "modifiers": 0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "why": "Enter where the page will not say what has focus",
+      "platform": "mac",
+      "op": {
+        "op": "keys",
+        "key": "Enter"
+      },
+      "dry_run": false,
+      "script": {
+        "submitters": null
+      },
+      "expected": {
+        "step": {
+          "op": "keys",
+          "ok": false,
+          "error": "needs_confirmation",
+          "detail": "cannot tell what that key would press here; re-send with \"confirm\": true to proceed"
+        },
+        "calls": []
       }
     },
     {
@@ -1622,7 +1770,9 @@
           {
             "method": "Input.dispatchKeyEvent",
             "params": {
-              "type": "rawKeyDown",
+              "type": "keyDown",
+              "text": "\r",
+              "unmodifiedText": "\r",
               "key": "Enter",
               "code": "Enter",
               "windowsVirtualKeyCode": 13,
@@ -2106,7 +2256,7 @@
     }
   ],
   "tables": {
-    "helper_version": 10,
+    "helper_version": 11,
     "threshold": 0.7,
     "modifiers": {
       "alt": 1,

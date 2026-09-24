@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased (general-browser-use, part 3)
+
+- Enter/Space rail closes the second review's gaps: the field's form *and* dialog, through shadow
+  roots and custom-element buttons, and the nearest button-holding wrapper when there is neither.
+  Hidden, disabled, and (inside a form) `type=button` controls are not what Enter presses, so an
+  ordinary search box in a whole-page form is no longer refused.
+- `keys` Enter/Space and a `slow` type containing a line break answer to the same rail. A bare
+  Enter from `keys` now carries its `\r` text, so it submits plain forms like `submit` does.
+- The click rail also matches what a button shows (`value`, text, alt), not only its accessible name.
+- A refused SUBMIT withdraws Enter for that field on that page and the goal goes on.
+- Password masking reads `type` through the browser's own accessors, captured at helper load.
+- Long goals: each goal sees only its own steps, and the model gets short notes of the pages the
+  goal already left (`earlier_pages`), so a value read on one page is usable on the next.
+  A covering cookie/consent dialog is dismissed rather than reported BLOCKED.
+- Helper version 11.
+
 ## [Unreleased]
 
 ### Added

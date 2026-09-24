@@ -170,7 +170,8 @@ function replyFor(script, expression) {
   if (expression.includes('resolve(')) return { ok: true, x: 10, y: 20 };
   if (expression.includes('label(')) return script.label;
   if (expression.includes('active(')) return script.focused;
-  if (expression.includes('submitters(')) return script.submitters;
+  if (expression.includes('submitters(') || expression.includes('pressTargets(')) return script.submitters;
+  if (expression.includes('pressNamesOf(')) return [];
   if (expression.includes('selectOption(')) return script.select;
   if (expression.includes('__jevRefs.nodes.get(')) return false;
   if (expression.includes('readyState')) return 'complete';

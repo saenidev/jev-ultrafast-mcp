@@ -42,6 +42,9 @@ flip while the goal stands still, and a target that has been retried stops being
 Submit populated search fields before opening a result.
 WAIT only when the needed control is absent, disabled, or submitted results are
 still loading. Recent WAIT actions are not evidence of loading.
+A cookie banner, consent notice, or other dialog covering the page is dismissed
+first (accept or close it); it is never by itself a reason for BLOCKED.
+Values read on earlier pages are in earlier_pages; use them.
 DONE requires visible evidence that ALL requirements are satisfied.
 BLOCKED means no supported operation can make progress."""
 
@@ -163,6 +166,23 @@ def withdraw_valueless(heads: dict[str, list], history: list[dict], url: str) ->
                              if (e.ref, e.name) not in valueless]
         if not heads["TYPE_TEXT"]:
             del heads["TYPE_TEXT"]
+    return heads
+
+
+def withdraw_refused_submit(heads: dict[str, list], history: list[dict], url: str) -> dict[str, list]:
+    """Stop offering SUBMIT on a field whose Enter was refused on this page in this run.
+
+    Same keying as `withdraw_valueless` (ref, name, and the page it happened on), so the refusal
+    stays with the field it was about. The field's buttons are still offered for CLICK, where the
+    rail judges each one on its own.
+    """
+    refused = {(item.get("ref"), item.get("target") or "") for item in history
+               if item.get("op") == "type" and item.get("error") == "needs_confirmation"
+               and item.get("ref") and item.get("where") == url}
+    if refused and heads.get("SUBMIT"):
+        heads["SUBMIT"] = [e for e in heads["SUBMIT"] if (e.ref, e.name) not in refused]
+        if not heads["SUBMIT"]:
+            del heads["SUBMIT"]
     return heads
 
 
@@ -355,7 +375,8 @@ def _reachability(element) -> tuple:
     return (tier, element.occluded, not element.in_viewport)
 
 
-def choose(cfg: Config, observation: Observation, goal: str, history: list[dict]) -> dict:
+def choose(cfg: Config, observation: Observation, goal: str, history: list[dict],
+           pages_seen: list[dict] | None = None) -> dict:
     """One TypeSafe request: which operation, and which target for each operation."""
     if not cfg.typesafe_key:
         raise TurboUnavailable(
@@ -372,6 +393,7 @@ def choose(cfg: Config, observation: Observation, goal: str, history: list[dict]
     # becomes a change of approach instead of eight identical steps.
     withdraw_stalled(heads, history)
     withdraw_valueless(heads, history, observation.url)
+    withdraw_refused_submit(heads, history, observation.url)
     operations = {name for name in operations if name in heads}
 
     questions: dict = {
@@ -425,6 +447,9 @@ def choose(cfg: Config, observation: Observation, goal: str, history: list[dict]
             for element in observation.elements
         ],
         "recent_actions": history[-10:],
+        # Pages this goal already visited, oldest first: what was read there (a reference
+        # number, a price) is only visible here once the page has changed.
+        **({"earlier_pages": pages_seen} if pages_seen else {}),
     }
     body = {"model": cfg.typesafe_model, "state": state, "questions": questions}
 

@@ -322,7 +322,7 @@ def _drive(monkeypatch, session: _FakeSession, decisions: list[dict], max_steps:
     """Run `browser_goal` against a scripted session and decision sequence."""
     seen: list[dict] = []
 
-    def fake_choose(_cfg, _observation, _goal, _history):
+    def fake_choose(_cfg, _observation, _goal, _history, **_kw):
         seen.append(_observation)
         if not decisions:
             return {"operation": "DONE", "ref": None, "confidence": 1.0}

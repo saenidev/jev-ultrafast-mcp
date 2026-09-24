@@ -26,7 +26,7 @@
   // satisfied, the server re-injected this whole file on every observation, and
   // a page holding the older helper was never actually upgraded, because the
   // early return fired on the number it already carried.
-  const VERSION = 10;
+  const VERSION = 11;
   try { if (W !== W.top) return; } catch (_) { return; }
   if (W.__jevMcp && W.__jevMcp.version === VERSION) return;
 
@@ -75,16 +75,24 @@
   // are all text boxes, and reading the attribute left them with no role -- never editable, never
   // offered to TYPE_TEXT. `.type` is already lower-cased and resolved by the browser. Non-inputs
   // (a `<button type=submit>`, a `<ul>` with a stray attribute) keep reading the attribute.
+  // Captured once, when the helper loads: a page can override `getAttribute` or `type` on an
+  // element (or its prototype chain below these) to disguise a password field.
+  const GET_ATTRIBUTE = Element.prototype.getAttribute;
+  const INPUT_TYPE = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'type').get;
+  const rawAttr = (e, name) => { try { return GET_ATTRIBUTE.call(e, name); } catch (_) { return null; } };
   const typeOf = e => {
-    if (e && e.tagName === 'INPUT' && typeof e.type === 'string') return e.type.toLowerCase();
-    return ((e.getAttribute && e.getAttribute('type')) || '').toLowerCase();
+    if (e && e.tagName === 'INPUT') {
+      try { const t = INPUT_TYPE.call(e); if (typeof t === 'string') return t.toLowerCase(); } catch (_) { /* not a real input */ }
+    }
+    return (rawAttr(e, 'type') || '').toLowerCase();
   };
   const isFile = e => e.tagName === 'INPUT' && typeOf(e) === 'file';
   // Secret if *either* reading says password. `.type` is what the browser edits, but it is a
   // getter a page can override; the attribute is what the markup declared. Masking on the union
   // means neither one alone can un-mask a password field.
   const isPassword = e => typeOf(e) === 'password'
-    || ((e.getAttribute && e.getAttribute('type')) || '').toLowerCase() === 'password';
+    || (rawAttr(e, 'type') || '').toLowerCase() === 'password'
+    || (e && typeof e.type === 'string' && e.type.toLowerCase() === 'password');
 
   const deepVisible = e => {
     let n = e;
@@ -264,7 +272,11 @@
   const keyOf = () => JSON.stringify([performance.timeOrigin, location.href,
     innerWidth, innerHeight, pageFields()]);
 
-  const scopeOf = e => e.closest('form,dialog,[role="dialog"],article,li,tr,[role="row"],[role="listitem"]') || e.parentElement;
+  // What tells two identically named controls apart: the row or card they sit in, before any form.
+  // A mail list puts each row's Star/Archive buttons in their own tiny form whose text is just
+  // "Star Archive", which made every row's context the same.
+  const scopeOf = e => e.closest('tr,[role="row"],li,[role="listitem"],article')
+    || e.closest('form,dialog,[role="dialog"]') || e.parentElement;
 
   const guardOf = e => {
     if (!e || !e.isConnected || !deepVisible(e)) return null;
@@ -627,23 +639,109 @@
   // needs confirming when clicked and not when the Amount field is sent. Reported as names, and the
   // server runs its own confirmation rules over them, so there is one rule list and it lives there.
   // `null` (not `[]`) when the ref is gone: "nothing to confirm" and "could not look" differ.
-  const submitters = ref => {
-    const e = nodeFor(ref);
+  // An element and each shadow host it sits inside, innermost first.
+  const hostChain = e => {
+    const out = [];
+    for (let n = e, hops = 0; n && hops < 20; hops += 1) {
+      out.push(n);
+      const root = n.getRootNode && n.getRootNode();
+      n = root instanceof ShadowRoot ? root.host : null;
+    }
+    return out;
+  };
+  // Every element under `root`, through open shadow roots.
+  const deepAll = (root, out) => {
+    out = out || [];
+    for (const x of root.querySelectorAll('*')) {
+      out.push(x);
+      if (x.shadowRoot) deepAll(x.shadowRoot, out);
+    }
+    return out;
+  };
+  const PRESSABLE = 'button,input[type="submit"],input[type="image"],input[type="button"],[role="button"]';
+  const pressable = x => x.matches && x.matches(PRESSABLE);
+  // Every name a button goes by. The rail must match on what the user sees as well as the accessible
+  // name: `<input type=submit value="Pay now" aria-label="Continue">` says Pay now on screen.
+  const pressNames = x => {
+    const names = [nameOf(x), x.innerText, rawAttr(x, 'alt'), rawAttr(x, 'title')];
+    if (FLAT.includes(typeOf(x))) names.push(x.value);
+    // A design-system button: the real <button> lives in a shadow root and its text is slotted in.
+    const root = x.getRootNode && x.getRootNode();
+    if (root instanceof ShadowRoot) names.push(root.host.innerText || root.host.textContent);
+    return names.map(n => clean(n).slice(0, 120)).filter(Boolean);
+  };
+  const liveButtons = scope => deepAll(scope).filter(x => pressable(x) && deepVisible(x) && !disabled(x));
+
+  // The names of the controls Enter in this field could stand in for.
+  //
+  // Enter in a text field submits its form as if its default button had been clicked, and a page's
+  // own Enter handler usually presses its dialog's or its wrapper's button. So Enter answers to the
+  // rail that guards clicking those buttons. The scope is the union of the field's form and dialog,
+  // found through shadow roots; with neither, the nearest ancestor holding a button (a page handler
+  // presses what is next to the field). Hidden and disabled controls are skipped: Enter cannot press
+  // them. Names only -- the server runs its own confirmation rules over them, one list, in one place.
+  // `null` (not `[]`) when the ref is gone: "nothing to confirm" and "could not look" differ.
+  const submittersOf = e => {
     if (!e || !e.isConnected) return null;
-    const form = e.form || e.closest('form');
-    const scope = form || e.closest('dialog,[role="dialog"],[role="alertdialog"]');
-    if (!scope) return [];
-    const found = new Set(scope.querySelectorAll(
-      'button,input[type="submit"],input[type="image"],[role="button"]'));
-    // `form=` attributes put a form's buttons anywhere in the document.
-    if (form) for (const x of form.elements) if (x.tagName === 'BUTTON' || x.type === 'submit') found.add(x);
-    return [...found].map(x => clean(nameOf(x) || x.value || '').slice(0, 120)).filter(Boolean);
+    const chain = hostChain(e);
+    const scopes = new Set();
+    for (const n of chain) {
+      const form = n.form || (n.closest && n.closest('form'));
+      if (form) scopes.add(form);
+      const dialog = n.closest && n.closest('dialog,[role="dialog"],[role="alertdialog"]');
+      if (dialog) scopes.add(dialog);
+    }
+    const found = new Set();
+    // In a form, implicit submission can only press a submit control, so a `type=button` "Buy now"
+    // elsewhere in an ASP.NET-style whole-page form is not what Enter sends. A dialog's page handler
+    // can press any of its buttons.
+    const submitsForm = x => !(x.tagName === 'BUTTON' && ['button', 'reset'].includes(typeOf(x)))
+      && !(x.tagName === 'INPUT' && ['button', 'reset'].includes(typeOf(x)));
+    for (const scope of scopes) {
+      const all = liveButtons(scope);
+      for (const x of (scope.tagName === 'FORM' ? all.filter(submitsForm) : all)) found.add(x);
+      // `form=` attributes put a form's buttons anywhere in the document.
+      if (scope.tagName === 'FORM') {
+        for (const x of scope.elements) if (pressable(x) && submitsForm(x) && deepVisible(x) && !disabled(x)) found.add(x);
+      }
+    }
+    if (!scopes.size) {
+      let n = e;
+      for (let hops = 0; hops < 8; hops += 1) {
+        const up = n.parentElement || (n.getRootNode && n.getRootNode() instanceof ShadowRoot ? n.getRootNode().host : null);
+        if (!up || up === document.body || up === document.documentElement) break;
+        n = up;
+        const near = liveButtons(n);
+        if (near.length) { near.forEach(x => found.add(x)); break; }
+      }
+    }
+    return [...new Set([...found].flatMap(pressNames))];
+  };
+  const submitters = ref => submittersOf(nodeFor(ref));
+  // Every name one control goes by (accessible name, visible text, value, alt), for the click rail.
+  const pressNamesOf = ref => { const e = nodeFor(ref); return e && e.isConnected ? pressNames(e) : null; };
+
+  // What pressing Enter or Space *now* would press: the focused button itself, or whatever the
+  // focused field submits. For `keys`, which has no ref and presses into whatever has focus.
+  // `null` when focus sits somewhere this document cannot read.
+  const pressTargets = () => {
+    let e = document.activeElement;
+    try {
+      for (let hops = 0; e && hops < 20; hops += 1) {
+        if (e.tagName === 'IFRAME') { if (!e.contentDocument) return null; e = e.contentDocument.activeElement; continue; }
+        if (e.shadowRoot && e.shadowRoot.activeElement) { e = e.shadowRoot.activeElement; continue; }
+        break;
+      }
+    } catch (_) { return null; }
+    if (!e || e === e.ownerDocument.body || e === e.ownerDocument.documentElement) return [];
+    if (pressable(e)) return pressNames(e);
+    return submittersOf(e);
   };
 
   const stats = () => ({ refs: S.nodes.size, next: S.next, hasSnap: !!S.snap });
 
   W.__jevMcp = {
     version: VERSION, readState, verify, reinspect, resolve, scrollTo, selectOption,
-    settle, label, active, submitters, stats, keyOf, guardOf,
+    settle, label, active, submitters, pressTargets, pressNamesOf, stats, keyOf, guardOf,
   };
 })();

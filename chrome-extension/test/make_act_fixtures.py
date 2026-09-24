@@ -182,8 +182,10 @@ def reply_for(cdp: ScriptedCdp, expression: str):
         return cdp.label
     if "active(" in expression:
         return cdp.focused
-    if "submitters(" in expression:
+    if "submitters(" in expression or "pressTargets(" in expression:
         return cdp.submitters
+    if "pressNamesOf(" in expression:
+        return []
     if "selectOption(" in expression:
         return cdp.select
     if "__jevRefs.nodes.get(" in expression:
@@ -241,6 +243,10 @@ SCENARIOS: list[dict] = [
      "label": "Amount", "submitters": ["Pay now"]},
     {"why": "submitting where the page will not say what Enter submits",
      "op": {"op": "type", "ref": "e5", "text": "ab", "submit": True}, "submitters": None},
+    # A slow type whose text holds a line break presses Enter, so it answers to the same rail.
+    {"why": "slow typing a line break into a field whose form's button needs confirming",
+     "op": {"op": "type", "ref": "e5", "text": "1\r", "slow": True},
+     "label": "Amount", "submitters": ["Pay now"]},
     {"why": "selecting by value", "op": {"op": "select", "ref": "e5", "value": "3"}},
     {"why": "selecting by label", "op": {"op": "select", "ref": "e5", "label": "3 adults"}},
     {"why": "a select with nothing to select", "op": {"op": "select", "ref": "e5"}},
@@ -266,6 +272,14 @@ SCENARIOS: list[dict] = [
     {"why": "hovering", "op": {"op": "hover", "ref": "e5"}},
     {"why": "a key combination", "op": {"op": "keys", "keys": "ctrl+shift+k"}},
     {"why": "a named key", "op": {"op": "keys", "key": "Enter"}},
+    {"why": "Enter into whatever would press a guarded button",
+     "op": {"op": "keys", "key": "Enter"}, "submitters": ["Pay now"]},
+    {"why": "Space onto a focused guarded button",
+     "op": {"op": "keys", "keys": ["Tab", "Space"]}, "submitters": ["Pay now"]},
+    {"why": "the same Enter, confirmed",
+     "op": {"op": "keys", "key": "Enter", "confirm": True}, "submitters": ["Pay now"]},
+    {"why": "Enter where the page will not say what has focus",
+     "op": {"op": "keys", "key": "Enter"}, "submitters": None},
     {"why": "keys with nothing to press", "op": {"op": "keys"}},
     # `keys` is a second way to type, and these four are the cases that says so: a bare character
     # goes out as `Input.insertText`, so the field it lands in is whatever has focus, and the rail

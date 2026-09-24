@@ -352,6 +352,6 @@ def test_the_extension_does_not_read_a_role_from_the_op_either() -> None:
     assert "rawOp.role" not in source, "the extension still trusts a role on the op"
     # Two *call* sites, not two mentions: the definition line carries the same
     # text, which is what this assertion counted the first time it ran.
-    assert source.count("const blocked = clickRefusal(ref, target);") == 2, (
+    assert source.count("const blocked = await clickRefusal(ref, target);") == 2, (
         "the extension has one clicking op guarded and one not")
     assert "typingRefusal(ref, target)" in source

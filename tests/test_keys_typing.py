@@ -61,6 +61,10 @@ class RecordingCdp:
                  await_promise: bool = False, timeout: float | None = None):
         if "active(" in expression:
             return self.focused
+        # What Enter/Space would press: nothing guarded on these pages. The Enter/Space rail is
+        # covered against real pages in tests/test_press_rail_live.py.
+        if "pressTargets(" in expression:
+            return []
         # `_after_input` reads this to decide whether it has to wait for a
         # navigation, and a page that never answers "complete" spends
         # `cfg.nav_timeout` per op -- twenty seconds a test, which is how this

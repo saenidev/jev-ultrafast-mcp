@@ -40,7 +40,7 @@ HELPER_SRC = (Path(__file__).with_name("js") / "observer.js").read_text(encoding
 # The extension's constant was held to this one by `act-parity.mjs` and the
 # source's was held to nothing, which is how 7 here and 6 in the page survived a
 # release. `tests/test_helper_version.py` pins all three now.
-HELPER_VERSION = 10
+HELPER_VERSION = 11
 
 MODIFIERS = {
     "alt": 1, "option": 1,
@@ -48,6 +48,9 @@ MODIFIERS = {
     "meta": 4, "cmd": 4, "command": 4, "super": 4,
     "shift": 8,
 }
+# Keys that activate what has focus: Enter submits a field or presses a button, Space presses one.
+PRESS_KEYS = {"enter", "return", "space"}
+
 KEY_SPECS = {
     "enter": ("Enter", "Enter", 13), "return": ("Enter", "Enter", 13),
     "tab": ("Tab", "Tab", 9), "escape": ("Escape", "Escape", 27), "esc": ("Escape", "Escape", 27),
@@ -679,7 +682,34 @@ class Session:
         latent rather than live.
         """
         element = self._observed(ref)
-        return confirm_reason(self.cfg, label, element.role if element is not None else "")
+        role = element.role if element is not None else ""
+        reason = confirm_reason(self.cfg, label, role)
+        if reason:
+            return reason
+        # The accessible name is one of the names a button goes by. `<input type=submit
+        # value="Pay now" aria-label="Continue">` reads "Continue" and says Pay now on screen,
+        # and the rule is about what the user would be agreeing to.
+        others = self._safe_eval("window.__jevMcp.pressNamesOf(%s)" % json.dumps(ref))
+        for name in others if isinstance(others, list) else []:
+            reason = confirm_reason(self.cfg, str(name), role)
+            if reason:
+                return reason
+        return None
+
+    def _press_refusal(self) -> str | None:
+        """Why a key press that clicks (Enter, Space) into whatever has focus must be confirmed.
+
+        `keys` carries no ref: Enter in a focused field submits it, and Enter or Space on a
+        focused button presses it. Either one is a click the click rail never saw.
+        """
+        names = self._safe_eval("window.__jevMcp.pressTargets()")
+        if not isinstance(names, list):
+            return "cannot tell what that key would press here"
+        for name in names:
+            reason = confirm_reason(self.cfg, str(name), "button")
+            if reason:
+                return f"that key would press {str(name)[:60]!r}, which {reason}"
+        return None
 
     def _submit_refusal(self, ref: str) -> str | None:
         """Why pressing Enter in `ref` has to be confirmed first, or None.
@@ -775,7 +805,11 @@ class Session:
                     return Step(op=op, ref=ref, target=target_label, ok=False,
                                 error="needs_confirmation",
                                 detail="field looks sensitive; re-send with \"confirm\": true")
-                if raw_op.get("submit"):
+                text_value = str(raw_op.get("text") or "")
+                # `slow` sends each character as a key press, so "\r" or "\n" in the text is
+                # an Enter: the same submission `submit` asks for, and the same rail.
+                enters = bool(raw_op.get("slow")) and any(c in text_value for c in "\r\n")
+                if raw_op.get("submit") or enters:
                     blocked = self._submit_refusal(ref)
                     if blocked and not raw_op.get("confirm"):
                         return Step(op=op, ref=ref, target=target_label, ok=False,
@@ -902,6 +936,11 @@ class Session:
                             "page. Use `type` with the field's ref and \"confirm\": true, "
                             "which records it as a placeholder rather than in the clear."
                         )
+                if any(_key_parts(key)[0] in PRESS_KEYS for key in keys) and not raw_op.get("confirm"):
+                    blocked = self._press_refusal()
+                    if blocked:
+                        return Step(op=op, ok=False, error="needs_confirmation",
+                                    detail=f"{blocked}; re-send with \"confirm\": true to proceed")
                 if dry_run:
                     return Step(op=op, ok=True, detail="dry run")
                 for key in keys:
@@ -1197,6 +1236,13 @@ class Session:
             key, code, virtual = name, name, 0
         payload = dict(key=key, code=code, windowsVirtualKeyCode=virtual,
                        nativeVirtualKeyCode=virtual, modifiers=modifiers)
+        if key == "Enter" and not modifiers:
+            # A bare Enter carries its "\r" text, as a keyboard's does: `rawKeyDown` fires no
+            # keypress, so a plain form never submitted and `keys` disagreed with `submit`.
+            self._call("Input.dispatchKeyEvent", type="keyDown", text="\r",
+                       unmodifiedText="\r", **payload)
+            self._call("Input.dispatchKeyEvent", type="keyUp", **payload)
+            return
         self._call("Input.dispatchKeyEvent", type="rawKeyDown", **payload)
         self._call("Input.dispatchKeyEvent", type="keyUp", **payload)
 
