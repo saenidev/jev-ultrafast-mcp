@@ -26,7 +26,7 @@
   // satisfied, the server re-injected this whole file on every observation, and
   // a page holding the older helper was never actually upgraded, because the
   // early return fired on the number it already carried.
-  const VERSION = 8;
+  const VERSION = 9;
   try { if (W !== W.top) return; } catch (_) { return; }
   if (W.__jevMcp && W.__jevMcp.version === VERSION) return;
 
@@ -70,7 +70,15 @@
 
   const prune = () => { for (const [id, e] of S.nodes) if (!e.isConnected) S.nodes.delete(id); };
 
-  const typeOf = e => ((e.getAttribute && e.getAttribute('type')) || '').toLowerCase();
+  // The input's *effective* type, which is what the browser renders and edits. The raw attribute
+  // is not: HTML's default is `text`, so `<input name="q">`, `type=""` and an unrecognised type
+  // are all text boxes, and reading the attribute left them with no role -- never editable, never
+  // offered to TYPE_TEXT. `.type` is already lower-cased and resolved by the browser. Non-inputs
+  // (a `<button type=submit>`, a `<ul>` with a stray attribute) keep reading the attribute.
+  const typeOf = e => {
+    if (e && e.tagName === 'INPUT' && typeof e.type === 'string') return e.type.toLowerCase();
+    return ((e.getAttribute && e.getAttribute('type')) || '').toLowerCase();
+  };
   const isFile = e => e.tagName === 'INPUT' && typeOf(e) === 'file';
 
   const deepVisible = e => {

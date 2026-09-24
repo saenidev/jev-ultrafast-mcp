@@ -40,7 +40,7 @@ HELPER_SRC = (Path(__file__).with_name("js") / "observer.js").read_text(encoding
 # The extension's constant was held to this one by `act-parity.mjs` and the
 # source's was held to nothing, which is how 7 here and 6 in the page survived a
 # release. `tests/test_helper_version.py` pins all three now.
-HELPER_VERSION = 8
+HELPER_VERSION = 9
 
 MODIFIERS = {
     "alt": 1, "option": 1,
