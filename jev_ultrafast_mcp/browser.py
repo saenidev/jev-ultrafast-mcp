@@ -40,7 +40,7 @@ HELPER_SRC = (Path(__file__).with_name("js") / "observer.js").read_text(encoding
 # The extension's constant was held to this one by `act-parity.mjs` and the
 # source's was held to nothing, which is how 7 here and 6 in the page survived a
 # release. `tests/test_helper_version.py` pins all three now.
-HELPER_VERSION = 9
+HELPER_VERSION = 10
 
 MODIFIERS = {
     "alt": 1, "option": 1,
@@ -681,6 +681,38 @@ class Session:
         element = self._observed(ref)
         return confirm_reason(self.cfg, label, element.role if element is not None else "")
 
+    def _submit_refusal(self, ref: str) -> str | None:
+        """Why pressing Enter in `ref` has to be confirmed first, or None.
+
+        Enter in a field submits its form as if its default button had been clicked, so it
+        answers to the rail that guards clicking: if any button of the field's form (or dialog)
+        matches a confirmation rule, Enter needs `confirm` too. Otherwise "Pay now" was guarded
+        when clicked and not when the Amount field beside it was sent. A page that will not
+        say (the ref is gone, the helper is missing) is refused rather than trusted.
+        """
+        names = self._safe_eval("window.__jevMcp.submitters(%s)" % json.dumps(ref))
+        if not isinstance(names, list):
+            return "cannot tell what Enter would submit here"
+        for name in names:
+            reason = confirm_reason(self.cfg, str(name), "button")
+            if reason:
+                return f"Enter would submit {str(name)[:60]!r}, which {reason}"
+        return None
+
+    def _press_enter(self) -> None:
+        """Enter as a keyboard produces it: keydown carrying the `\\r` text, then keyup.
+
+        `rawKeyDown` with no text fires keydown/keyup only -- no keypress, so no implicit
+        form submission: plain HTML forms never submitted, and only pages whose own script
+        handles the Enter keydown did. `keyDown` with `text` is the full key press.
+        """
+        key, code, virtual = KEY_SPECS["enter"]
+        payload = dict(key=key, code=code, windowsVirtualKeyCode=virtual,
+                       nativeVirtualKeyCode=virtual, modifiers=0)
+        self._call("Input.dispatchKeyEvent", type="keyDown", text="\r",
+                   unmodifiedText="\r", **payload)
+        self._call("Input.dispatchKeyEvent", type="keyUp", **payload)
+
     def _typing_refusal(self, ref: str, label: str) -> bool:
         """Whether this field's value must not be typed without `"confirm": true`.
 
@@ -743,12 +775,18 @@ class Session:
                     return Step(op=op, ref=ref, target=target_label, ok=False,
                                 error="needs_confirmation",
                                 detail="field looks sensitive; re-send with \"confirm\": true")
+                if raw_op.get("submit"):
+                    blocked = self._submit_refusal(ref)
+                    if blocked and not raw_op.get("confirm"):
+                        return Step(op=op, ref=ref, target=target_label, ok=False,
+                                    error="needs_confirmation",
+                                    detail=f"{blocked}; re-send with \"confirm\": true to proceed")
                 if dry_run:
                     return Step(op=op, ref=ref, target=target_label, ok=True, detail="dry run")
                 self._do_type(ref, str(raw_op.get("text") or ""), raw_op.get("clear", True),
                               raw_op.get("slow"))
                 if raw_op.get("submit"):
-                    self._dispatch_keys("Enter")
+                    self._press_enter()
                 self._after_input("fast")
 
             elif op == "select":

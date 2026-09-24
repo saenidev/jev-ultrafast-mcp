@@ -475,6 +475,7 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
         # The stall count belongs to a run, not to the session: a goal that
         # inherited the previous goal's count would call itself stuck on step 1.
         tab.reset_progress()
+        valueless_at: dict[int, str] = {}  # this run's no-value steps -> page URL
         started = time.perf_counter()
         if url:
             tab.navigate(url)
@@ -491,7 +492,8 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
         tokens = 0
         while steps < max_steps:
             history = [{"op": step.op, "ref": step.ref, "target": step.target, "ok": step.ok,
-                        **({"error": step.error} if step.error else {})}
+                        **({"error": step.error} if step.error else {}),
+                        **({"where": valueless_at[id(step)]} if id(step) in valueless_at else {})}
                        for step in tab.history[-10:]]
             try:
                 decision = policy.choose(CONFIG, observation, goal, history)
@@ -539,12 +541,19 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                     tab.history.append(Step(op="type", ok=False, ref=decision["ref"],
                                             target=decision.get("target"),
                                             error=policy.NO_VALUE_ERROR, detail=str(exc)))
+                    # Where it was refused, so the withdrawal applies to this field on this
+                    # page in this run only: refs restart per document, and a later goal
+                    # may well have a value for the same box.
+                    valueless_at[id(tab.history[-1])] = observation.url
                     trace.append(f"  {steps}. TYPE_TEXT {decision['ref']} "
                                  f"{decision.get('target') or ''} → skipped: {exc}")
                     continue
             if operation == "SUBMIT":
-                element = observation.by_ref.get(decision["ref"])
-                op["text"] = (element.value if element is not None else "") or ""
+                # Press Enter in the field as it stands. Never retype it: the observed value
+                # is whitespace-collapsed and cut at 160 characters, and `clear` would
+                # replace the real content with that copy before sending it.
+                op["text"] = ""
+                op["clear"] = False
                 op["submit"] = True
             if operation == "SELECT" and decision.get("value") is not None:
                 op["value"] = decision["value"]

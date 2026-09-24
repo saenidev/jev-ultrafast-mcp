@@ -933,7 +933,9 @@
           {
             "method": "Input.dispatchKeyEvent",
             "params": {
-              "type": "rawKeyDown",
+              "type": "keyDown",
+              "text": "\r",
+              "unmodifiedText": "\r",
               "key": "Enter",
               "code": "Enter",
               "windowsVirtualKeyCode": 13,
@@ -953,6 +955,129 @@
             }
           }
         ]
+      }
+    },
+    {
+      "why": "submitting a field whose form's button needs confirming",
+      "platform": "mac",
+      "op": {
+        "op": "type",
+        "ref": "e5",
+        "text": "",
+        "clear": false,
+        "submit": true
+      },
+      "dry_run": false,
+      "script": {
+        "label": "Amount",
+        "submitters": [
+          "Pay now"
+        ]
+      },
+      "expected": {
+        "step": {
+          "op": "type",
+          "ok": false,
+          "ref": "e5",
+          "target": "Amount",
+          "error": "needs_confirmation",
+          "detail": "Enter would submit 'Pay now', which matches confirmation rule '\\\\bpay\\\\s+now\\\\b'; re-send with \"confirm\": true to proceed"
+        },
+        "calls": []
+      }
+    },
+    {
+      "why": "the same submit, confirmed",
+      "platform": "mac",
+      "op": {
+        "op": "type",
+        "ref": "e5",
+        "text": "",
+        "clear": false,
+        "submit": true,
+        "confirm": true
+      },
+      "dry_run": false,
+      "script": {
+        "label": "Amount",
+        "submitters": [
+          "Pay now"
+        ]
+      },
+      "expected": {
+        "step": {
+          "op": "type",
+          "ok": true,
+          "ref": "e5",
+          "target": "Amount"
+        },
+        "calls": [
+          {
+            "method": "Input.dispatchMouseEvent",
+            "params": {
+              "type": "mousePressed",
+              "button": "left",
+              "clickCount": 1
+            }
+          },
+          {
+            "method": "Input.dispatchMouseEvent",
+            "params": {
+              "type": "mouseReleased",
+              "button": "left",
+              "clickCount": 1
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "text": "\r",
+              "unmodifiedText": "\r",
+              "key": "Enter",
+              "code": "Enter",
+              "windowsVirtualKeyCode": 13,
+              "nativeVirtualKeyCode": 13,
+              "modifiers": 0
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "key": "Enter",
+              "code": "Enter",
+              "windowsVirtualKeyCode": 13,
+              "nativeVirtualKeyCode": 13,
+              "modifiers": 0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "why": "submitting where the page will not say what Enter submits",
+      "platform": "mac",
+      "op": {
+        "op": "type",
+        "ref": "e5",
+        "text": "ab",
+        "submit": true
+      },
+      "dry_run": false,
+      "script": {
+        "submitters": null
+      },
+      "expected": {
+        "step": {
+          "op": "type",
+          "ok": false,
+          "ref": "e5",
+          "target": "Search",
+          "error": "needs_confirmation",
+          "detail": "cannot tell what Enter would submit here; re-send with \"confirm\": true to proceed"
+        },
+        "calls": []
       }
     },
     {
@@ -1981,7 +2106,7 @@
     }
   ],
   "tables": {
-    "helper_version": 9,
+    "helper_version": 10,
     "threshold": 0.7,
     "modifiers": {
       "alt": 1,

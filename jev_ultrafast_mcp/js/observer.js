@@ -26,7 +26,7 @@
   // satisfied, the server re-injected this whole file on every observation, and
   // a page holding the older helper was never actually upgraded, because the
   // early return fired on the number it already carried.
-  const VERSION = 9;
+  const VERSION = 10;
   try { if (W !== W.top) return; } catch (_) { return; }
   if (W.__jevMcp && W.__jevMcp.version === VERSION) return;
 
@@ -80,6 +80,11 @@
     return ((e.getAttribute && e.getAttribute('type')) || '').toLowerCase();
   };
   const isFile = e => e.tagName === 'INPUT' && typeOf(e) === 'file';
+  // Secret if *either* reading says password. `.type` is what the browser edits, but it is a
+  // getter a page can override; the attribute is what the markup declared. Masking on the union
+  // means neither one alone can un-mask a password field.
+  const isPassword = e => typeOf(e) === 'password'
+    || ((e.getAttribute && e.getAttribute('type')) || '').toLowerCase() === 'password';
 
   const deepVisible = e => {
     let n = e;
@@ -381,7 +386,7 @@
       }
       // Login forms are a blind spot for observers that drop password fields.
       // Keep the control usable, but never let its value leave the page.
-      const secretField = typeOf(e) === 'password' || (SECRET_HINT.test(name) && isEditable(e));
+      const secretField = isPassword(e) || (SECRET_HINT.test(name) && isEditable(e));
       const editable = isEditable(e);
       // A menu that only opens on hover is reachable through its trigger and
       // nothing else, and the trigger announces itself: `aria-haspopup` names
@@ -397,6 +402,7 @@
         node, ref: 'e' + node, role: it.role, name, label: name || it.role,
         value: secretField ? '' : valueOf(e).slice(0, 300),
         editable, occluded, inViewport, hoverable, disabled: isDisabled,
+        multiline: e.tagName === 'TEXTAREA' || !!e.isContentEditable,
         // Role outranks position. The reverse order -- viewport 100 against a
         // primary control's 40 -- let a submit button below the fold lose its
         // slot to a hundred in-viewport navigation links, and made the kept set
@@ -609,14 +615,35 @@
       focused: true,
       name,
       role: roleOf(e) || '',
-      secret: typeOf(e) === 'password' || (SECRET_HINT.test(name) && isEditable(e)),
+      secret: isPassword(e) || (SECRET_HINT.test(name) && isEditable(e)),
     };
+  };
+
+  // The names of the controls Enter in this field would stand in for.
+  //
+  // Enter in a text field submits its form as if the form's default button had been clicked
+  // (implicit submission), and a page's own Enter handler usually does the same for its dialog. So
+  // `type` with `submit` must answer to the rail that guards clicking those buttons, or "Pay now"
+  // needs confirming when clicked and not when the Amount field is sent. Reported as names, and the
+  // server runs its own confirmation rules over them, so there is one rule list and it lives there.
+  // `null` (not `[]`) when the ref is gone: "nothing to confirm" and "could not look" differ.
+  const submitters = ref => {
+    const e = nodeFor(ref);
+    if (!e || !e.isConnected) return null;
+    const form = e.form || e.closest('form');
+    const scope = form || e.closest('dialog,[role="dialog"],[role="alertdialog"]');
+    if (!scope) return [];
+    const found = new Set(scope.querySelectorAll(
+      'button,input[type="submit"],input[type="image"],[role="button"]'));
+    // `form=` attributes put a form's buttons anywhere in the document.
+    if (form) for (const x of form.elements) if (x.tagName === 'BUTTON' || x.type === 'submit') found.add(x);
+    return [...found].map(x => clean(nameOf(x) || x.value || '').slice(0, 120)).filter(Boolean);
   };
 
   const stats = () => ({ refs: S.nodes.size, next: S.next, hasSnap: !!S.snap });
 
   W.__jevMcp = {
     version: VERSION, readState, verify, reinspect, resolve, scrollTo, selectOption,
-    settle, label, active, stats, keyOf, guardOf,
+    settle, label, active, submitters, stats, keyOf, guardOf,
   };
 })();

@@ -96,6 +96,7 @@ export function elementFromRaw(raw, { secret = false } = {}) {
     multiple: Boolean(raw.multiple),
     label: short(raw.label || '', 160),
     hoverable: Boolean(raw.hoverable),
+    multiline: Boolean(raw.multiline),
     disabled: Boolean(raw.disabled),
     in_viewport: raw.inViewport === undefined ? true : Boolean(raw.inViewport),
   };

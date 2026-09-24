@@ -28,7 +28,7 @@ import { DEFAULT_THRESHOLD, pythonRepr, resolve as resolveSteps } from './macro.
  * third is held by `tests/test_helper_version.py`, because a server number above the helper's makes
  * the comparison below permanently true -- the observer is reinstalled on every call, and a page
  * carrying the shipped one is never actually upgraded. */
-export const HELPER_VERSION = 9;
+export const HELPER_VERSION = 10;
 
 /* `browser.py`'s tables, verbatim. They are data, not logic, and getting one key code wrong is a
  * keystroke that lands as the wrong character with nothing in the report to say so. */
@@ -432,6 +432,29 @@ export function createSession(driver, {
     return confirmReason(target, element ? element.role : '', confirmPatterns);
   }
 
+  /**
+   * `browser.py`'s `_submit_refusal` — why pressing Enter in `ref` must be confirmed first, or null.
+   * Enter submits the field's form as its default button would, so it answers to the click rail for
+   * every button of that form or dialog. A page that will not say is refused, not trusted.
+   */
+  async function submitRefusal(ref) {
+    const names = await safeEval(`window.__jevMcp.submitters(${JSON.stringify(ref)})`);
+    if (!Array.isArray(names)) return 'cannot tell what Enter would submit here';
+    for (const name of names) {
+      const reason = confirmReason(String(name), 'button', confirmPatterns);
+      if (reason) return `Enter would submit ${pythonRepr(String(name).slice(0, 60))}, which ${reason}`;
+    }
+    return null;
+  }
+
+  /** `browser.py`'s `_press_enter` — keyDown carrying "\r", so implicit form submission happens. */
+  async function pressEnter() {
+    const [key, code, virtual] = KEY_SPECS.enter;
+    const payload = { key, code, windowsVirtualKeyCode: virtual, nativeVirtualKeyCode: virtual, modifiers: 0 };
+    await driver.call('Input.dispatchKeyEvent', { type: 'keyDown', text: '\r', unmodifiedText: '\r', ...payload });
+    await driver.call('Input.dispatchKeyEvent', { type: 'keyUp', ...payload });
+  }
+
   /** `browser.py`'s `_typing_refusal` — whether this field's value needs an explicit confirm. */
   function typingRefusal(ref, target) {
     const element = observed(ref);
@@ -619,11 +642,18 @@ export function createSession(driver, {
           return stepOf({ op, ref, target, ok: false, error: 'needs_confirmation',
             detail: 'field looks sensitive; re-send with "confirm": true' });
         }
+        if (rawOp.submit) {
+          const blocked = await submitRefusal(ref);
+          if (blocked && !rawOp.confirm) {
+            return stepOf({ op, ref, target, ok: false, error: 'needs_confirmation',
+              detail: `${blocked}; re-send with "confirm": true to proceed` });
+          }
+        }
         if (dryRun) return stepOf({ op, ref, target, ok: true, detail: 'dry run' });
         const clear = rawOp.clear === undefined ? true : Boolean(rawOp.clear);
         const text = String(rawOp.text === undefined || rawOp.text === null ? '' : rawOp.text);
         await doType(ref, text, clear, rawOp.slow);
-        if (rawOp.submit) await dispatchKeys('Enter');
+        if (rawOp.submit) await pressEnter();
         await afterInput('fast');
 
       } else if (op === 'select') {

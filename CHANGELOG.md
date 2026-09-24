@@ -8,6 +8,27 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **SUBMIT: send a filled field with Enter, under the click rail.** The goal loop can now press
+  Enter in a filled, non-secret, single-line field (a search box whose suggestion list does not
+  submit, e.g. GitHub). It presses Enter on the field as it stands; it never retypes the observed
+  value, which is whitespace-collapsed and cut at 160 characters. Enter submits the field's form as
+  its default button would, so `type` with `submit` now answers to the confirmation rules for every
+  button of that form or dialog (`__jevMcp.submitters`): Enter beside "Pay now" needs `confirm`,
+  exactly as clicking it does, and a page that will not say what Enter submits is refused. Enter is
+  now a full key press (`keyDown` carrying `\r`), so plain HTML forms actually submit; before, only
+  pages with their own keydown handler did. Not offered on textareas or contenteditable.
+- **A field the goal gives no value for is skipped, not fatal.** The text helper's `{"text": null}`
+  is `NoValueForField` (a `TurboUnavailable` subclass): the step is recorded as skipped and that
+  field -- same ref, same name, same page, this run only -- is withdrawn from TYPE_TEXT. Every other
+  helper failure still ends the goal with nothing typed.
+
+### Fixed
+
+- **Inputs without a recognised `type` are text boxes.** `<input name=q>`, `type=""` and unknown
+  types were given no role and never offered for typing; the observer reads the effective `.type`.
+  Password masking uses the union of `.type` and the attribute, so a page overriding the getter
+  cannot un-mask a password field. Helper version 8 -> 10.
+
 - **A Claude Desktop bundle, and the entry point that would have shipped broken.** `mcpb/` plus
   `scripts/build_mcpb.py` pack the server as a `.mcpb`, the format Claude Desktop installs by
   double-click. The manifest declares `server.type: "uv"` rather than `"python"`, because the MCPB

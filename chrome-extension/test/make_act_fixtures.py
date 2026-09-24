@@ -157,6 +157,8 @@ class ScriptedCdp:
         # What the page says has focus. `keys` asks, because a bare single character is text and
         # the field it would land in is whatever is focused.
         self.focused: dict = {"focused": False}
+        # What Enter in the field would submit: the names of its form's buttons.
+        self.submitters: list | None = []
 
     # `Session._call` and `Session._safe_eval` are the only two entry points used.
     def call(self, method, session_id=None, timeout=None, **params):
@@ -180,6 +182,8 @@ def reply_for(cdp: ScriptedCdp, expression: str):
         return cdp.label
     if "active(" in expression:
         return cdp.focused
+    if "submitters(" in expression:
+        return cdp.submitters
     if "selectOption(" in expression:
         return cdp.select
     if "__jevRefs.nodes.get(" in expression:
@@ -228,6 +232,15 @@ SCENARIOS: list[dict] = [
     {"why": "typing without clearing first, one key at a time",
      "op": {"op": "type", "ref": "e5", "text": "ab", "clear": False, "slow": True}},
     {"why": "typing and submitting", "op": {"op": "type", "ref": "e5", "text": "ab", "submit": True}},
+    # Enter submits the field's form as its default button would, so it answers to the click rail.
+    {"why": "submitting a field whose form's button needs confirming",
+     "op": {"op": "type", "ref": "e5", "text": "", "clear": False, "submit": True},
+     "label": "Amount", "submitters": ["Pay now"]},
+    {"why": "the same submit, confirmed",
+     "op": {"op": "type", "ref": "e5", "text": "", "clear": False, "submit": True, "confirm": True},
+     "label": "Amount", "submitters": ["Pay now"]},
+    {"why": "submitting where the page will not say what Enter submits",
+     "op": {"op": "type", "ref": "e5", "text": "ab", "submit": True}, "submitters": None},
     {"why": "selecting by value", "op": {"op": "select", "ref": "e5", "value": "3"}},
     {"why": "selecting by label", "op": {"op": "select", "ref": "e5", "label": "3 adults"}},
     {"why": "a select with nothing to select", "op": {"op": "select", "ref": "e5"}},
@@ -364,6 +377,8 @@ def scenario_case(scenario: dict) -> dict:
         cdp.select = scenario["select"]
     if "focused" in scenario:
         cdp.focused = scenario["focused"]
+    if "submitters" in scenario:
+        cdp.submitters = scenario["submitters"]
     platform = scenario.get("platform", "mac")
     session = browser.Session(name="fixture", cfg=Config(), cdp=cdp)
     with platform_as(platform):
@@ -382,7 +397,7 @@ def scenario_case(scenario: dict) -> dict:
         "op": scenario["op"],
         "dry_run": scenario.get("dry_run", False),
         # What the scripted page had to say, so the other side can set up the same page.
-        "script": {key: scenario[key] for key in ("label", "guard", "select", "focused")
+        "script": {key: scenario[key] for key in ("label", "guard", "select", "focused", "submitters")
                    if key in scenario},
         "expected": {
             "step": report,

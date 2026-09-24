@@ -52,6 +52,8 @@ class Element:
     # whatever it opens is only reachable after pointing at it. The observer
     # decides this from `aria-haspopup`/`aria-expanded`; see js/observer.js.
     hoverable: bool = False
+    # A textarea or contenteditable: Enter there is a newline (or a chat "send" of free text).
+    multiline: bool = False
     # Present but not usable. Kept in the table on purpose: a submit button that
     # only enables once an option is chosen is the ordinary shape of a form, and
     # a model that cannot see it can select an option and still have nothing to
@@ -83,6 +85,7 @@ class Element:
             multiple=bool(raw.get("multiple")),
             label=_short(raw.get("label") or "", 160),
             hoverable=bool(raw.get("hoverable")),
+            multiline=bool(raw.get("multiline")),
             disabled=bool(raw.get("disabled")),
             # The observer reports this as `inViewport`. Dropping it left `in_viewport`
             # permanently True, so the `»` flag never rendered even though the header
@@ -109,9 +112,11 @@ class Element:
         kinds = []
         if self.editable:
             kinds.append("TYPE_TEXT")
-            if self.value and not self.secret:
+            if self.value and not self.secret and not self.multiline:
                 # A typed query still has to be sent. Enter is how a search box is sent,
                 # and without this the model's only way on is to click a suggestion list.
+                # Not on a textarea/contenteditable: Enter there adds a line, or sends a
+                # message the model never composed.
                 kinds.append("SUBMIT")
         if self.role in {"checkbox", "radio", "switch"}:
             kinds.append("TOGGLE")

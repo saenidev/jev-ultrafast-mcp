@@ -145,16 +145,22 @@ class NoValueForField(TurboUnavailable):
 NO_VALUE_ERROR = "no_value_in_goal"
 
 
-def withdraw_valueless(heads: dict[str, list], history: list[dict]) -> dict[str, list]:
+def withdraw_valueless(heads: dict[str, list], history: list[dict], url: str) -> dict[str, list]:
     """Take fields the goal gives no value for out of TYPE_TEXT, entirely.
 
     Unlike `withdraw_stalled` this may empty the head: offering the field again only buys
     the same refusal, and a goal with nothing left to type should move on to other work.
+
+    A refusal is about one field: the same ref *and* name on the same page (`where`, which the
+    goal loop stamps only on this run's refusals). Refs restart per document, so a ref alone
+    would withdraw an unrelated field on the next page; and a later goal may have the value.
     """
-    valueless = {item.get("ref") for item in history
-                 if item.get("error") == NO_VALUE_ERROR and item.get("ref")}
+    valueless = {(item.get("ref"), item.get("target") or "") for item in history
+                 if item.get("error") == NO_VALUE_ERROR and item.get("ref")
+                 and item.get("where") == url}
     if valueless and heads.get("TYPE_TEXT"):
-        heads["TYPE_TEXT"] = [e for e in heads["TYPE_TEXT"] if e.ref not in valueless]
+        heads["TYPE_TEXT"] = [e for e in heads["TYPE_TEXT"]
+                             if (e.ref, e.name) not in valueless]
         if not heads["TYPE_TEXT"]:
             del heads["TYPE_TEXT"]
     return heads
@@ -365,7 +371,7 @@ def choose(cfg: Config, observation: Observation, goal: str, history: list[dict]
     # Withdraw what has been retried to the point of standing still, so a loop
     # becomes a change of approach instead of eight identical steps.
     withdraw_stalled(heads, history)
-    withdraw_valueless(heads, history)
+    withdraw_valueless(heads, history, observation.url)
     operations = {name for name in operations if name in heads}
 
     questions: dict = {

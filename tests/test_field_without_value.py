@@ -76,21 +76,58 @@ def test_only_the_exact_null_answer_counts_as_no_value(monkeypatch, content):
 def test_a_field_with_no_value_is_withdrawn_from_typing():
     name = Element(ref="e1", role="textbox", name="Name", editable=True)
     notes = Element(ref="e2", role="textbox", name="Notes", editable=True)
-    history = [{"op": "type", "ref": "e2", "ok": False, "error": policy.NO_VALUE_ERROR}]
+    history = [{"op": "type", "ref": "e2", "target": "Notes", "ok": False,
+                "error": policy.NO_VALUE_ERROR, "where": "https://example.test/"}]
 
     _, heads = policy._operation_heads(_observation([name, notes]))
-    policy.withdraw_valueless(heads, history)
+    policy.withdraw_valueless(heads, history, "https://example.test/")
 
     assert [e.ref for e in heads["TYPE_TEXT"]] == ["e1"]
+
+
+def test_a_refusal_on_another_page_withdraws_nothing_here():
+    """Refs restart per document: e1 on page A is not e1 on page B (review P2-2)."""
+    email = Element(ref="e1", role="textbox", name="Email", editable=True)
+    history = [{"op": "type", "ref": "e1", "target": "Notes", "ok": False,
+                "error": policy.NO_VALUE_ERROR, "where": "https://example.test/a"}]
+
+    _, heads = policy._operation_heads(_observation([email]))
+    policy.withdraw_valueless(heads, history, "https://example.test/")
+
+    assert [e.ref for e in heads["TYPE_TEXT"]] == ["e1"]
+
+
+def test_a_refusal_from_an_earlier_goal_withdraws_nothing():
+    """Only the running goal stamps `where`; a previous goal's refusal carries none (P2-2)."""
+    notes = Element(ref="e2", role="textbox", name="Notes", editable=True)
+    history = [{"op": "type", "ref": "e2", "target": "Notes", "ok": False,
+                "error": policy.NO_VALUE_ERROR}]
+
+    _, heads = policy._operation_heads(_observation([notes]))
+    policy.withdraw_valueless(heads, history, "https://example.test/")
+
+    assert [e.ref for e in heads["TYPE_TEXT"]] == ["e2"]
+
+
+def test_the_same_ref_with_another_name_is_another_field():
+    other = Element(ref="e2", role="textbox", name="Company", editable=True)
+    history = [{"op": "type", "ref": "e2", "target": "Notes", "ok": False,
+                "error": policy.NO_VALUE_ERROR, "where": "https://example.test/"}]
+
+    _, heads = policy._operation_heads(_observation([other]))
+    policy.withdraw_valueless(heads, history, "https://example.test/")
+
+    assert [e.ref for e in heads["TYPE_TEXT"]] == ["e2"]
 
 
 def test_withdrawing_the_last_typeable_field_removes_the_operation():
     notes = Element(ref="e2", role="textbox", name="Notes", editable=True)
     order = Element(ref="e3", role="button", name="Order")
-    history = [{"op": "type", "ref": "e2", "ok": False, "error": policy.NO_VALUE_ERROR}]
+    history = [{"op": "type", "ref": "e2", "target": "Notes", "ok": False,
+                "error": policy.NO_VALUE_ERROR, "where": "https://example.test/"}]
 
     _, heads = policy._operation_heads(_observation([notes, order]))
-    policy.withdraw_valueless(heads, history)
+    policy.withdraw_valueless(heads, history, "https://example.test/")
 
     assert "TYPE_TEXT" not in heads, "offering it again only buys the same refusal"
     assert "e3" in [e.ref for e in heads["CLICK"]]
@@ -104,6 +141,13 @@ def test_submit_is_offered_only_on_a_filled_non_secret_field():
     assert "SUBMIT" in filled.target_kinds()
     assert "SUBMIT" not in empty.target_kinds()
     assert "SUBMIT" not in secret.target_kinds()
+
+
+def test_submit_is_not_offered_where_enter_is_a_newline():
+    """A textarea/contenteditable: Enter adds a line, or sends a message nobody composed (P1-2)."""
+    box = Element(ref="e1", role="textbox", name="Comment", editable=True, value="hi", multiline=True)
+    assert "SUBMIT" not in box.target_kinds()
+    assert "TYPE_TEXT" in box.target_kinds()
 
 
 def test_submit_runs_the_existing_type_verb():
@@ -198,7 +242,7 @@ def test_other_text_helper_failures_still_end_the_goal(monkeypatch):
     assert tab.acts == [], "nothing may be typed when the helper failed"
 
 
-def test_submit_retypes_the_field_s_own_value_and_presses_enter(monkeypatch):
+def test_submit_presses_enter_without_retyping(monkeypatch):
     search = Element(ref="e1", role="searchbox", name="Search", editable=True, value="browser-use")
     tab = _Tab(_observation([search]))
 
@@ -211,7 +255,9 @@ def test_submit_retypes_the_field_s_own_value_and_presses_enter(monkeypatch):
     ]
     out, _ = _drive(monkeypatch, tab, decisions, text_for)
 
-    assert tab.acts == [[{"op": "type", "ref": "e1", "text": "browser-use", "submit": True}]], tab.acts
+    assert tab.acts == [[{"op": "type", "ref": "e1", "text": "", "clear": False, "submit": True}]], (
+        "SUBMIT presses Enter on the field as it is; retyping the observed (truncated) value "
+        "would replace the real content")
     assert "status: done" in out, out
 
 
@@ -221,3 +267,29 @@ def test_the_rules_say_when_to_submit_instead_of_picking_a_suggestion():
     rules = " ".join(policy.NEXT_ACTION.split())
     assert "SUBMIT the filled field" in rules
     assert "autocomplete suggestion selected" in rules, "the combobox rule itself must stay"
+
+
+
+def test_choose_does_not_offer_typing_once_every_field_is_valueless(monkeypatch):
+    """Through `choose` itself, so dropping its withdraw call or its recompute is caught (M4/M5)."""
+    notes = Element(ref="e2", role="textbox", name="Notes", editable=True)
+    order = Element(ref="e3", role="button", name="Order")
+    sent: list[dict] = []
+
+    def fake_post(url, key, body):
+        sent.append(body)
+        ids = list(body["questions"]["operation"]["criteria"])
+        probabilities = {name: (1.0 if name == "DONE" else 0.0) for name in ids}
+        return {"answers": {"operation": {"choice": "DONE", "confidence": 1.0,
+                                          "probabilities": probabilities}}}
+
+    monkeypatch.setattr(policy, "_post", fake_post)
+    cfg = dataclasses.replace(Config.from_env(), typesafe_key="k")
+    history = [{"op": "type", "ref": "e2", "target": "Notes", "ok": False,
+                "error": policy.NO_VALUE_ERROR, "where": "https://example.test/"}]
+    policy.choose(cfg, _observation([notes, order]), "order a pizza", history)
+
+    questions = sent[0]["questions"]
+    assert "TYPE_TEXT" not in questions["operation"]["criteria"]
+    assert "type_text_target" not in questions
+    assert "CLICK" in questions["operation"]["criteria"]
