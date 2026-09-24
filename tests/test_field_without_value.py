@@ -213,3 +213,11 @@ def test_submit_retypes_the_field_s_own_value_and_presses_enter(monkeypatch):
 
     assert tab.acts == [[{"op": "type", "ref": "e1", "text": "browser-use", "submit": True}]], tab.acts
     assert "status: done" in out, out
+
+
+def test_the_rules_say_when_to_submit_instead_of_picking_a_suggestion():
+    """Measured on GitHub: with only "select the matching suggestion" to go on, the model clicked
+    a suggestion *list* that held no match until the stall detector ended the goal."""
+    rules = " ".join(policy.NEXT_ACTION.split())
+    assert "SUBMIT the filled field" in rules
+    assert "autocomplete suggestion selected" in rules, "the combobox rule itself must stay"
