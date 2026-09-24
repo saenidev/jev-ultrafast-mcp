@@ -109,6 +109,10 @@ class Element:
         kinds = []
         if self.editable:
             kinds.append("TYPE_TEXT")
+            if self.value and not self.secret:
+                # A typed query still has to be sent. Enter is how a search box is sent,
+                # and without this the model's only way on is to click a suggestion list.
+                kinds.append("SUBMIT")
         if self.role in {"checkbox", "radio", "switch"}:
             kinds.append("TOGGLE")
         elif self.role == "file":

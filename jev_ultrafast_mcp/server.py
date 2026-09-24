@@ -19,7 +19,7 @@ from mcp.types import ToolAnnotations
 from . import assertions as assertions_mod
 from . import macros as macros_mod
 from . import policy
-from .browser import BrowserManager, PageStale
+from .browser import BrowserManager, PageStale, Step
 from .cdp import CdpError, ChromeLaunchError
 from .config import Config, provider_note
 from .observe import Observation
@@ -490,7 +490,8 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
         browser_ms = 0   # time spent waiting on the page
         tokens = 0
         while steps < max_steps:
-            history = [{"op": step.op, "ref": step.ref, "target": step.target, "ok": step.ok}
+            history = [{"op": step.op, "ref": step.ref, "target": step.target, "ok": step.ok,
+                        **({"error": step.error} if step.error else {})}
                        for step in tab.history[-10:]]
             try:
                 decision = policy.choose(CONFIG, observation, goal, history)
@@ -528,7 +529,23 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                 op["ref"] = decision["ref"]
             if operation == "TYPE_TEXT":
                 element = observation.by_ref.get(decision["ref"])
-                op["text"] = policy.text_for(CONFIG, goal, element, observation, history)
+                try:
+                    op["text"] = policy.text_for(CONFIG, goal, element, observation, history)
+                except policy.NoValueForField as exc:
+                    # A field the goal says nothing about (an optional note, a newsletter box)
+                    # is not a reason to abandon the goal. Nothing is typed; the step is
+                    # recorded so the field is withdrawn and the model can see why.
+                    steps += 1
+                    tab.history.append(Step(op="type", ok=False, ref=decision["ref"],
+                                            target=decision.get("target"),
+                                            error=policy.NO_VALUE_ERROR, detail=str(exc)))
+                    trace.append(f"  {steps}. TYPE_TEXT {decision['ref']} "
+                                 f"{decision.get('target') or ''} → skipped: {exc}")
+                    continue
+            if operation == "SUBMIT":
+                element = observation.by_ref.get(decision["ref"])
+                op["text"] = (element.value if element is not None else "") or ""
+                op["submit"] = True
             if operation == "SELECT" and decision.get("value") is not None:
                 op["value"] = decision["value"]
             if operation == "SCROLL":

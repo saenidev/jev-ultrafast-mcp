@@ -58,6 +58,7 @@ OPERATION_LABELS = {
     "CLICK": "Click an element, button, menu option, autocomplete suggestion, or calendar day.",
     "HOVER": "Rest the pointer on a menu trigger so the menu it hides opens.",
     "TYPE_TEXT": "Enter or replace text in an editable field.",
+    "SUBMIT": "Press Enter in a filled text field to submit it (a search box, a one-field form).",
     "SELECT": "Choose an observed dropdown value.",
     "TOGGLE": "Flip an observed checkbox, radio, or switch.",
     "SCROLL": "Scroll the page.",
@@ -73,6 +74,7 @@ OPERATION_TO_ACT = {
     "CLICK": "click",
     "HOVER": "hover",
     "TYPE_TEXT": "type",
+    "SUBMIT": "type",   # re-enters the field's own value, then presses Enter
     "SELECT": "select",
     "TOGGLE": "toggle",
     "SCROLL": "scroll",
@@ -81,7 +83,9 @@ OPERATION_TO_ACT = {
 
 # The same map read backwards, for the caller that holds an executed verb and
 # needs the name the model was offered.
-ACT_TO_OPERATION = {verb: name for name, verb in OPERATION_TO_ACT.items()}
+# SUBMIT shares `type` with TYPE_TEXT, so it is left out: a `type` step in the history is
+# read as TYPE_TEXT, which is what the stall detection has always counted it as.
+ACT_TO_OPERATION = {verb: name for name, verb in OPERATION_TO_ACT.items() if name != "SUBMIT"}
 
 
 def stalled_targets(history: list[dict], threshold: int = 3) -> dict[str, set[str]]:
@@ -126,6 +130,33 @@ def withdraw_stalled(heads: dict[str, list], history: list[dict]) -> dict[str, l
 
 class TurboUnavailable(RuntimeError):
     pass
+
+
+class NoValueForField(TurboUnavailable):
+    """The text helper found no value in the goal for the field the model picked.
+
+    Not a provider failure: the helper is right not to invent one. The goal loop leaves the
+    field as it is, records the step, and stops offering that field for typing.
+    """
+
+
+# The history marker for that step. `withdraw_valueless` keys on it.
+NO_VALUE_ERROR = "no_value_in_goal"
+
+
+def withdraw_valueless(heads: dict[str, list], history: list[dict]) -> dict[str, list]:
+    """Take fields the goal gives no value for out of TYPE_TEXT, entirely.
+
+    Unlike `withdraw_stalled` this may empty the head: offering the field again only buys
+    the same refusal, and a goal with nothing left to type should move on to other work.
+    """
+    valueless = {item.get("ref") for item in history
+                 if item.get("error") == NO_VALUE_ERROR and item.get("ref")}
+    if valueless and heads.get("TYPE_TEXT"):
+        heads["TYPE_TEXT"] = [e for e in heads["TYPE_TEXT"] if e.ref not in valueless]
+        if not heads["TYPE_TEXT"]:
+            del heads["TYPE_TEXT"]
+    return heads
 
 
 def available(cfg: Config) -> bool:
@@ -333,6 +364,8 @@ def choose(cfg: Config, observation: Observation, goal: str, history: list[dict]
     # Withdraw what has been retried to the point of standing still, so a loop
     # becomes a change of approach instead of eight identical steps.
     withdraw_stalled(heads, history)
+    withdraw_valueless(heads, history)
+    operations = {name for name in operations if name in heads}
 
     questions: dict = {
         "operation": {
@@ -524,6 +557,11 @@ def text_for(cfg: Config, goal: str, element, observation: Observation,
         raw = None
     try:
         output = json.loads(raw or "")
+        if output == {"text": None}:
+            # The helper's documented answer for "the goal gives no value for this field".
+            raise NoValueForField(
+                f"The goal gives no value for {getattr(element, 'name', '') or 'this field'!r}; "
+                "left it unchanged.")
         value = output["text"]
         if set(output) != {"text"} or not isinstance(value, str) or not value.strip() or len(value) > 2000:
             raise ValueError
