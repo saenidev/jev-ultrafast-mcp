@@ -95,6 +95,10 @@ export const DEFAULT_CONFIRM_PATTERNS = [
   '\\bunsubscribe\\b', '\\b(close|delete)\\s+permanently\\b',
   '\\bconfirm\\s+(and\\s+)?(pay|payment|order|purchase|transfer|booking)\\b',
   '\\bsend\\s+(money|payment)\\b', '\\bwithdraw\\b', '\\btransfer\\s+funds\\b',
+  '\\bremove\\b(?!\\s+(an?\\s+|one\\s+)?(adult|child|infant|senior|youth|teen|student|guest|traveller|traveler|passenger)s?(\\s+(in\\s+seat|on\\s+lap))?\\s*$)',
+  '\\bdiscard\\b', '\\bclear\\s+all\\b', '\\berase\\b',
+  '\\bempty\\s+(the\\s+|your\\s+)?(cart|basket|bag|trash|bin)\\b',
+  '\\bmove\\s+to\\s+(the\\s+)?(trash|bin)\\b',
 ];
 
 /* `safety.normal_name`: NFKC-folded, invisible characters removed, lower-cased. */

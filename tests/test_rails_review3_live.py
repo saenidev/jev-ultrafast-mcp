@@ -172,13 +172,15 @@ def test_confirm_still_lets_a_deliberate_action_through(manager):
 
 
 @pytest.mark.parametrize("name", ["Place your order", "Pay", "Delete", "Buy", "Confirm and pay",
-                                  "Cancel my subscription", "Pay\u200b now", "Ｐａｙ now"])
+                                  "Cancel my subscription", "Pay\u200b now", "Ｐａｙ now", "Remove"])
 def test_common_consequential_labels_need_confirmation(name):
     assert confirm_reason(Config(), name, "button"), name
 
 
+# "Remove" moved to the list above: a bare Remove deletes whatever row it sits in, and a
+# goal naming that row made the model click one (tests/test_goal_field_policy.py).
 @pytest.mark.parametrize("name", ["Add to cart", "Archive", "Close ticket", "Continue to review",
-                                  "Save and continue", "Remove", "Payment methods", "PayPal",
-                                  "Submit order", "Search", "Update"])
+                                  "Save and continue", "Payment methods", "PayPal",
+                                  "Submit order", "Search", "Update", "Remove adult"])
 def test_ordinary_labels_do_not(name):
     assert confirm_reason(Config(), name, "button") is None, name
