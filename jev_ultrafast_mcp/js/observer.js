@@ -26,7 +26,7 @@
   // satisfied, the server re-injected this whole file on every observation, and
   // a page holding the older helper was never actually upgraded, because the
   // early return fired on the number it already carried.
-  const VERSION = 12;
+  const VERSION = 13;
   try { if (W !== W.top) return; } catch (_) { return; }
   if (W.__jevMcp && W.__jevMcp.version === VERSION) return;
 
@@ -350,6 +350,12 @@
     opts = opts || {};
     const maxActions = opts.maxActions || 250;
     const maxText = opts.maxText || 6000;
+    // Words from the goal being run. On a page with more controls than the cap (Mount Everest's
+    // article: 2,683), the link a goal names -- "Tenzing Norgay" -- ranked with every other
+    // off-screen link and was cut, so the model never saw it and answered BLOCKED. A name that
+    // carries goal words is kept ahead of ones that do not; nothing else about ranking changes.
+    const prefer = (Array.isArray(opts.prefer) ? opts.prefer : [])
+      .map(w => String(w).toLowerCase()).filter(w => w.length >= 3).slice(0, 24);
     prune();
     const { roots, cross } = rootList();
     const height = document.documentElement.scrollHeight;
@@ -457,7 +463,8 @@
         rank: (isDisabled ? 0 : 10000)
           + (editable || PRIMARY.has(it.role) ? 1000 : 0)
           + (SECONDARY.has(it.role) ? 400 : 0)
-          + (inViewport ? 100 : 0),
+          + (inViewport ? 100 : 0)
+          + (prefer.length ? 1500 * Math.min(3, prefer.filter(w => name.toLowerCase().includes(w)).length) : 0),
         order: built.length,
         checked: ['checkbox', 'radio'].includes(typeOf(e)) ? !!e.checked : null,
         expanded,

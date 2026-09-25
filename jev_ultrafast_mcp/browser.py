@@ -40,7 +40,7 @@ HELPER_SRC = (Path(__file__).with_name("js") / "observer.js").read_text(encoding
 # The extension's constant was held to this one by `act-parity.mjs` and the
 # source's was held to nothing, which is how 7 here and 6 in the page survived a
 # release. `tests/test_helper_version.py` pins all three now.
-HELPER_VERSION = 12
+HELPER_VERSION = 13
 
 # How long a page with content and no controls must hold still (and have stopped fetching)
 # before `observe` accepts that it has none. Longer than the late-paint fixture's 1.2 s timer.
@@ -150,6 +150,9 @@ class Session:
     last: Observation | None = None
     history: list[Step] = field(default_factory=list)
     tabs: list[dict] = field(default_factory=list)
+    # Words of the goal being run, set by browser_goal for its duration. The observer keeps
+    # controls named with them ahead of others when a page has more than `max_actions`.
+    goal_terms: tuple[str, ...] = ()
     _known_targets: set[str] = field(default_factory=set)
     _recorder: list[dict] = field(default_factory=list)
     _recording: bool = False
@@ -486,6 +489,8 @@ class Session:
             "maxText": self.cfg.max_text if include_text else 0,
             "includeText": include_text,
         }
+        if self.goal_terms:
+            options["prefer"] = list(self.goal_terms)
         raw = self.cdp.evaluate(
             f"window.__jevMcp.readState({json.dumps(options)})",
             self.page_session, timeout=20,

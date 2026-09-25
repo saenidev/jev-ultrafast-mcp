@@ -28,7 +28,7 @@ import { DEFAULT_THRESHOLD, pythonRepr, resolve as resolveSteps } from './macro.
  * third is held by `tests/test_helper_version.py`, because a server number above the helper's makes
  * the comparison below permanently true -- the observer is reinstalled on every call, and a page
  * carrying the shipped one is never actually upgraded. */
-export const HELPER_VERSION = 12;
+export const HELPER_VERSION = 13;
 
 /* `browser.py`'s tables, verbatim. They are data, not logic, and getting one key code wrong is a
  * keystroke that lands as the wrong character with nothing in the report to say so. */
