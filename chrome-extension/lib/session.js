@@ -28,7 +28,7 @@ import { DEFAULT_THRESHOLD, pythonRepr, resolve as resolveSteps } from './macro.
  * third is held by `tests/test_helper_version.py`, because a server number above the helper's makes
  * the comparison below permanently true -- the observer is reinstalled on every call, and a page
  * carrying the shipped one is never actually upgraded. */
-export const HELPER_VERSION = 13;
+export const HELPER_VERSION = 14;
 
 /* `browser.py`'s tables, verbatim. They are data, not logic, and getting one key code wrong is a
  * keystroke that lands as the wrong character with nothing in the report to say so. */
@@ -89,12 +89,19 @@ export const SCROLLABLE_REASONS = new Set(
 
 /* `config.DEFAULT_DENY_PATTERNS`. `tests/test_extension.py` fails if these drift from Python's. */
 export const DEFAULT_CONFIRM_PATTERNS = [
-  '\\bdelete\\s+(account|workspace|repository|project)\\b',
-  '\\bpay\\s+now\\b', '\\bplace\\s+order\\b', '\\bcomplete\\s+purchase\\b', '\\bbuy\\s+now\\b',
-  '\\bcancel\\s+(order|subscription|booking)\\b', '\\bunsubscribe\\b',
-  '\\b(close|delete)\\s+permanently\\b', '\\bconfirm\\s+(payment|order|transfer)\\b',
+  '\\bdelete\\b', '\\bpay\\b', '\\bbuy\\b', '\\bplace\\s+(your\\s+)?order\\b',
+  '\\bcomplete\\s+(purchase|order)\\b', '\\bpurchase\\s+now\\b',
+  '\\bcancel\\s+(my\\s+|your\\s+)?(order|subscription|booking|membership|plan|account)\\b',
+  '\\bunsubscribe\\b', '\\b(close|delete)\\s+permanently\\b',
+  '\\bconfirm\\s+(and\\s+)?(pay|payment|order|purchase|transfer|booking)\\b',
   '\\bsend\\s+(money|payment)\\b', '\\bwithdraw\\b', '\\btransfer\\s+funds\\b',
 ];
+
+/* `safety.normal_name`: NFKC-folded, invisible characters removed, lower-cased. */
+const INVISIBLE = /[\u200b\u200c\u200d\u2060\ufeff\u00ad]/g;
+export function normalName(name) {
+  return String(name || '').normalize('NFKC').replace(INVISIBLE, '').toLowerCase();
+}
 
 /* `browser.py`'s `PageStale`: a ref no longer means what the agent chose. */
 export class StaleError extends Error {
@@ -198,7 +205,7 @@ export function confirmReason(name, role, patterns = DEFAULT_CONFIRM_PATTERNS) {
   // flag already ignores case, so deleting this line changes no result and the mutation run says so.
   // It stays because Python's does the same two things (`name.lower()` plus `re.IGNORECASE`) and
   // this file's job is to be that code in another language, not a tidier version of it.
-  const haystack = String(name || '').toLowerCase();
+  const haystack = normalName(name);
   for (const pattern of patterns) {
     if (new RegExp(pattern, 'i').test(haystack)) {
       // `{pattern!r}` in the server's message, which doubles every backslash — and a confirmation
@@ -470,6 +477,43 @@ export function createSession(driver, {
     return null;
   }
 
+  /**
+   * `browser.py`'s `_armed` — run one dispatched input with the in-page tripwire armed, so a guarded
+   * control the page presses meanwhile is cancelled before it runs. Returns what was caught.
+   * Not armed for a confirmed op. A page that will not take the tripwire gets nothing dispatched.
+   */
+  async function armed(confirmed, body) {
+    if (confirmed) {
+      const early = await body();
+      return { hits: [], early };
+    }
+    const rules = JSON.stringify(confirmPatterns);
+    let ok = await safeEval(`window.__jevMcp.arm(${rules})`);
+    if (ok !== true) {
+      await ensureHelper();
+      ok = await safeEval(`window.__jevMcp.arm(${rules})`);
+    }
+    if (ok !== true) {
+      throw new PolicyError('cannot guard this input on this page; nothing was sent. '
+        + 'Re-send with "confirm": true if it is intended.');
+    }
+    let early;
+    let found = null;
+    try {
+      early = await body();
+    } finally {
+      found = await safeEval('window.__jevMcp && window.__jevMcp.disarm()');
+    }
+    return { hits: Array.isArray(found) ? found.map(String) : [], early };
+  }
+
+  function tripped(op, ref, target, hits) {
+    const name = pythonRepr(String(hits[0]).slice(0, 60));
+    return stepOf({ op, ref, target, ok: false, error: 'needs_confirmation',
+      detail: `the page tried to press ${name}, which matches a confirmation rule; it was stopped `
+        + 'before it ran. Re-send with "confirm": true to proceed' });
+  }
+
   /** `browser.py`'s `_press_enter` — keyDown carrying "\r", so implicit form submission happens. */
   async function pressEnter() {
     const [key, code, virtual] = KEY_SPECS.enter;
@@ -662,11 +706,20 @@ export function createSession(driver, {
             detail: `${blocked}; re-send with "confirm": true to proceed` });
         }
         if (dryRun) return stepOf({ op, ref, target, ok: true, detail: 'dry run' });
-        await doClick(ref);
-        await afterInput(rawOp.kind === 'combobox' ? 'options' : 'fast');
+        const wire = await armed(Boolean(rawOp.confirm), async () => {
+          await doClick(ref);
+          await afterInput(rawOp.kind === 'combobox' ? 'options' : 'fast');
+        });
+        if (wire.hits.length) return tripped(op, ref, target, wire.hits);
 
       } else if (op === 'type') {
         target = await labelOf(ref);
+        // `type` clicks its target first, so a `type` aimed at a button is an unguarded click.
+        const seen = observed(ref);
+        if ((seen && !seen.editable)
+            || await safeEval(`window.__jevMcp.editable(${JSON.stringify(ref)})`) !== true) {
+          throw new TypeError(`${ref} is not a text field; use click for a button or link`);
+        }
         if (typingRefusal(ref, target) && !rawOp.confirm) {
           return stepOf({ op, ref, target, ok: false, error: 'needs_confirmation',
             detail: 'field looks sensitive; re-send with "confirm": true' });
@@ -684,9 +737,12 @@ export function createSession(driver, {
         if (dryRun) return stepOf({ op, ref, target, ok: true, detail: 'dry run' });
         const clear = rawOp.clear === undefined ? true : Boolean(rawOp.clear);
         const text = String(rawOp.text === undefined || rawOp.text === null ? '' : rawOp.text);
-        await doType(ref, text, clear, rawOp.slow);
-        if (rawOp.submit) await pressEnter();
-        await afterInput('fast');
+        const wire = await armed(Boolean(rawOp.confirm), async () => {
+          await doType(ref, text, clear, rawOp.slow);
+          if (rawOp.submit) await pressEnter();
+          await afterInput('fast');
+        });
+        if (wire.hits.length) return tripped(op, ref, target, wire.hits);
 
       } else if (op === 'select') {
         // `raw_op.get("value", raw_op.get("label"))` is presence-based: a present `value` wins even
@@ -723,8 +779,11 @@ export function createSession(driver, {
             detail: `${blocked}; re-send with "confirm": true to proceed` });
         }
         if (dryRun) return stepOf({ op, ref, target, ok: true, detail: 'dry run' });
-        await doClick(ref);
-        await afterInput('fast');
+        const wire = await armed(Boolean(rawOp.confirm), async () => {
+          await doClick(ref);
+          await afterInput('fast');
+        });
+        if (wire.hits.length) return tripped(op, ref, target, wire.hits);
 
       } else if (op === 'hover') {
         if (dryRun) return stepOf({ op, ref, ok: true, detail: 'dry run' });
@@ -776,7 +835,8 @@ export function createSession(driver, {
               + 'as a placeholder rather than in the clear.');
           }
         }
-        if (keys.some((key) => PRESS_KEYS.has(keyParts(key).name)) && !rawOp.confirm) {
+        const confirmed = Boolean(rawOp.confirm);
+        if (keys.some((key) => PRESS_KEYS.has(keyParts(key).name)) && !confirmed) {
           const blocked = await pressRefusal();
           if (blocked) {
             return stepOf({ op, ok: false, error: 'needs_confirmation',
@@ -784,11 +844,24 @@ export function createSession(driver, {
           }
         }
         if (dryRun) return stepOf({ op, ok: true, detail: 'dry run' });
-        for (const key of keys) {
-          await dispatchKeys(key);
-        }
         target = String(sequence);
-        await afterInput('fast');
+        const wire = await armed(confirmed, async () => {
+          for (const [index, key] of keys.entries()) {
+            // Focus moves between keys; see `browser.py`.
+            if (index && !confirmed && PRESS_KEYS.has(keyParts(key).name)) {
+              const blocked = await pressRefusal();
+              if (blocked) {
+                return stepOf({ op, ok: false, error: 'needs_confirmation',
+                  detail: `${blocked}; re-send with "confirm": true to proceed` });
+              }
+            }
+            await dispatchKeys(key);
+          }
+          await afterInput('fast');
+          return null;
+        });
+        if (wire.early) return wire.early;
+        if (wire.hits.length) return tripped(op, null, target, wire.hits);
 
       } else if (op === 'scroll') {
         const direction = String(rawOp.dir || rawOp.direction || 'down');

@@ -40,7 +40,7 @@ HELPER_SRC = (Path(__file__).with_name("js") / "observer.js").read_text(encoding
 # The extension's constant was held to this one by `act-parity.mjs` and the
 # source's was held to nothing, which is how 7 here and 6 in the page survived a
 # release. `tests/test_helper_version.py` pins all three now.
-HELPER_VERSION = 13
+HELPER_VERSION = 14
 
 # How long a page with content and no controls must hold still (and have stopped fetching)
 # before `observe` accepts that it has none. Longer than the late-paint fixture's 1.2 s timer.
@@ -782,6 +782,49 @@ class Session:
                 return f"Enter would submit {str(name)[:60]!r}, which {reason}"
         return None
 
+    def _armed(self, confirmed: bool):
+        """Context for one dispatched input: cancel any guarded control the page presses meanwhile.
+
+        Where a key press or click *leads* is up to the page's own handlers -- Enter in a field can
+        click "Delete repository" from anywhere in the document -- so no reading of the layout can
+        settle it. The tripwire in the page (`arm`/`disarm`) cancels, before the page sees it, any
+        click or submission that would activate a control matching a confirmation rule, and reports
+        it. Not armed for a confirmed op, which has already been agreed to.
+        """
+        session = self
+
+        class _Wire:
+            hits: list[str] = []
+
+            def __enter__(self):
+                if not confirmed:
+                    rules = json.dumps(session.cfg.confirm_patterns)
+                    armed = session._safe_eval("window.__jevMcp.arm(%s)" % rules)
+                    if armed is not True:
+                        session._ensure_helper()
+                        armed = session._safe_eval("window.__jevMcp.arm(%s)" % rules)
+                    if armed is not True:
+                        # Unguarded is not an option: a page that will not take the tripwire gets
+                        # nothing dispatched rather than a click nobody is watching.
+                        raise SafetyError("cannot guard this input on this page; nothing was sent. "
+                                          "Re-send with \"confirm\": true if it is intended.")
+                return self
+
+            def __exit__(self, *exc):
+                if not confirmed:
+                    found = session._safe_eval("window.__jevMcp && window.__jevMcp.disarm()")
+                    self.hits = [str(h) for h in found] if isinstance(found, list) else []
+                return False
+
+        return _Wire()
+
+    @staticmethod
+    def _tripped(op: str, ref, target, hits: list[str]) -> "Step":
+        name = hits[0][:60]
+        return Step(op=op, ref=ref, target=target, ok=False, error="needs_confirmation",
+                    detail=f"the page tried to press {name!r}, which matches a confirmation rule; it "
+                           "was stopped before it ran. Re-send with \"confirm\": true to proceed")
+
     def _press_enter(self) -> None:
         """Enter as a keyboard produces it: keydown carrying the `\\r` text, then keyup.
 
@@ -849,11 +892,20 @@ class Session:
                                 detail=f"{blocked}; re-send with \"confirm\": true to proceed")
                 if dry_run:
                     return Step(op=op, ref=ref, target=target_label, ok=True, detail="dry run")
-                self._do_click(ref)
-                self._after_input(("options" if raw_op.get("kind") == "combobox" else "fast"))
+                with self._armed(bool(raw_op.get("confirm"))) as wire:
+                    self._do_click(ref)
+                    self._after_input(("options" if raw_op.get("kind") == "combobox" else "fast"))
+                if wire.hits:
+                    return self._tripped(op, ref, target_label, wire.hits)
 
             elif op == "type":
                 target_label = self._label(ref)
+                # `type` clicks its target first, so a `type` aimed at a button is a click that the
+                # click rail never saw (the third review paid this way). Only a field takes text.
+                element = self._observed(ref)
+                if (element is not None and not element.editable) or \
+                        self._safe_eval("window.__jevMcp.editable(%s)" % json.dumps(ref)) is not True:
+                    raise ValueError(f"{ref} is not a text field; use click for a button or link")
                 if self._typing_refusal(ref, target_label) and not raw_op.get("confirm"):
                     return Step(op=op, ref=ref, target=target_label, ok=False,
                                 error="needs_confirmation",
@@ -870,11 +922,14 @@ class Session:
                                     detail=f"{blocked}; re-send with \"confirm\": true to proceed")
                 if dry_run:
                     return Step(op=op, ref=ref, target=target_label, ok=True, detail="dry run")
-                self._do_type(ref, str(raw_op.get("text") or ""), raw_op.get("clear", True),
-                              raw_op.get("slow"))
-                if raw_op.get("submit"):
-                    self._press_enter()
-                self._after_input("fast")
+                with self._armed(bool(raw_op.get("confirm"))) as wire:
+                    self._do_type(ref, str(raw_op.get("text") or ""), raw_op.get("clear", True),
+                                  raw_op.get("slow"))
+                    if raw_op.get("submit"):
+                        self._press_enter()
+                    self._after_input("fast")
+                if wire.hits:
+                    return self._tripped(op, ref, target_label, wire.hits)
 
             elif op == "select":
                 wanted = raw_op.get("value", raw_op.get("label"))
@@ -911,8 +966,11 @@ class Session:
                                 detail=f"{blocked}; re-send with \"confirm\": true to proceed")
                 if dry_run:
                     return Step(op=op, ref=ref, target=target_label, ok=True, detail="dry run")
-                self._do_click(ref)
-                self._after_input("fast")
+                with self._armed(bool(raw_op.get("confirm"))) as wire:
+                    self._do_click(ref)
+                    self._after_input("fast")
+                if wire.hits:
+                    return self._tripped(op, ref, target_label, wire.hits)
 
             elif op == "hover":
                 if dry_run:
@@ -989,17 +1047,29 @@ class Session:
                             "page. Use `type` with the field's ref and \"confirm\": true, "
                             "which records it as a placeholder rather than in the clear."
                         )
-                if any(_key_parts(key)[0] in PRESS_KEYS for key in keys) and not raw_op.get("confirm"):
+                confirmed = bool(raw_op.get("confirm"))
+                presses = any(_key_parts(key)[0] in PRESS_KEYS for key in keys)
+                if presses and not confirmed:
                     blocked = self._press_refusal()
                     if blocked:
                         return Step(op=op, ok=False, error="needs_confirmation",
                                     detail=f"{blocked}; re-send with \"confirm\": true to proceed")
                 if dry_run:
                     return Step(op=op, ok=True, detail="dry run")
-                for key in keys:
-                    self._dispatch_keys(key)
                 target_label = str(sequence)
-                self._after_input("fast")
+                with self._armed(confirmed) as wire:
+                    for index, key in enumerate(keys):
+                        # Focus moves between keys: in ["Tab", "Space"] the Space lands on whatever
+                        # the Tab reached, which the check above (made before the Tab) never saw.
+                        if index and not confirmed and _key_parts(key)[0] in PRESS_KEYS:
+                            blocked = self._press_refusal()
+                            if blocked:
+                                return Step(op=op, ok=False, error="needs_confirmation",
+                                            detail=f"{blocked}; re-send with \"confirm\": true to proceed")
+                        self._dispatch_keys(key)
+                    self._after_input("fast")
+                if wire.hits:
+                    return self._tripped(op, None, target_label, wire.hits)
 
             elif op == "scroll":
                 direction = str(raw_op.get("dir") or raw_op.get("direction") or "down")

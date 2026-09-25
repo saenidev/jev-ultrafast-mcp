@@ -179,6 +179,9 @@ function replyFor(script, expression) {
   if (expression.includes('innerWidth')) return 800;
   if (expression.includes('innerHeight')) return 600;
   if (expression.includes('settle(')) return null;
+  if (expression.includes('disarm(')) return script.tripped;
+  if (expression.includes('arm(')) return true;
+  if (expression.includes('editable(')) return script.editable;
   // The one reply Python's fixture does not need, because it drives `_run_op` directly while this
   // goes through `act`, which reads the page first.
   //
@@ -200,6 +203,8 @@ function scriptedDriver(scenario) {
     select: given.select || { ok: true, value: '3', label: '3 adults' },
     focused: given.focused || { focused: false },
     submitters: Object.prototype.hasOwnProperty.call(given, 'submitters') ? given.submitters : [],
+    editable: Object.prototype.hasOwnProperty.call(given, 'editable') ? given.editable : true,
+    tripped: given.tripped || [],
     calls: [],
   };
   return {

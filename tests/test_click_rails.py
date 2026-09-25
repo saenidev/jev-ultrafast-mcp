@@ -121,6 +121,12 @@ class ScriptedPage:
             return None
         if "__jevRefs.nodes.get(" in expression:
             return False
+        # The in-page tripwire: arms, and reports that the page pressed nothing guarded.
+        if "arm(" in expression:
+            return [] if "disarm(" in expression else True
+        # Only fields take text; these fakes stand in for fields unless a test says otherwise.
+        if "editable(" in expression:
+            return True
         return None
 
     def clicks(self) -> int:

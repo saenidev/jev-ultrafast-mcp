@@ -4,6 +4,7 @@ the blast radius has to be bounded by the server, not by prompt text."""
 from __future__ import annotations
 
 import re
+import unicodedata
 from urllib.parse import urlparse
 
 from .config import Config
@@ -54,11 +55,21 @@ def is_secret(cfg: Config, name: str, role: str) -> bool:
     return any(re.search(pattern, haystack, re.IGNORECASE) for pattern in cfg.secret_patterns)
 
 
+# Characters a page can put inside a label that render as nothing: "Pay\u200b now" reads "Pay now".
+_INVISIBLE = re.compile("[\u200b\u200c\u200d\u2060\ufeff\u00ad]")
+
+
+def normal_name(name: str) -> str:
+    """A label as the rules should read it: compatibility-folded (full-width letters), with the
+    invisible characters removed, lower-cased. The in-page tripwire folds the same way."""
+    return _INVISIBLE.sub("", unicodedata.normalize("NFKC", name or "")).lower()
+
+
 def confirm_reason(cfg: Config, name: str, role: str) -> str | None:
     """Return why a click needs explicit confirmation, or None if it is safe."""
     if role and role.lower() not in {"button", "link", "menuitem", "tab"}:
         return None
-    haystack = (name or "").lower()
+    haystack = normal_name(name)
     for pattern in cfg.confirm_patterns:
         if re.search(pattern, haystack, re.IGNORECASE):
             return f"matches confirmation rule {pattern!r}"

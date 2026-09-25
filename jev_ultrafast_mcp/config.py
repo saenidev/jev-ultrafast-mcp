@@ -263,10 +263,11 @@ def find_chrome(explicit: str | None = None) -> str:
 
 
 DEFAULT_DENY_PATTERNS = [
-    r"\bdelete\s+(account|workspace|repository|project)\b",
-    r"\bpay\s+now\b", r"\bplace\s+order\b", r"\bcomplete\s+purchase\b", r"\bbuy\s+now\b",
-    r"\bcancel\s+(order|subscription|booking)\b", r"\bunsubscribe\b",
-    r"\b(close|delete)\s+permanently\b", r"\bconfirm\s+(payment|order|transfer)\b",
+    r"\bdelete\b", r"\bpay\b", r"\bbuy\b", r"\bplace\s+(your\s+)?order\b",
+    r"\bcomplete\s+(purchase|order)\b", r"\bpurchase\s+now\b",
+    r"\bcancel\s+(my\s+|your\s+)?(order|subscription|booking|membership|plan|account)\b",
+    r"\bunsubscribe\b", r"\b(close|delete)\s+permanently\b",
+    r"\bconfirm\s+(and\s+)?(pay|payment|order|purchase|transfer|booking)\b",
     r"\bsend\s+(money|payment)\b", r"\bwithdraw\b", r"\btransfer\s+funds\b",
 ]
 

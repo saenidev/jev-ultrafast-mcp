@@ -26,7 +26,7 @@
   // satisfied, the server re-injected this whole file on every observation, and
   // a page holding the older helper was never actually upgraded, because the
   // early return fired on the number it already carried.
-  const VERSION = 13;
+  const VERSION = 14;
   try { if (W !== W.top) return; } catch (_) { return; }
   if (W.__jevMcp && W.__jevMcp.version === VERSION) return;
 
@@ -312,6 +312,12 @@
       scope ? clean(scope.innerText).slice(0, 400) : '']);
   };
 
+  const secretEditable = n => {
+    let host = n;
+    while (host.parentElement && host.parentElement.isContentEditable) host = host.parentElement;
+    return SECRET_HINT.test(clean(nameOf(host)));
+  };
+
   const textOf = max => {
     const words = [];
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
@@ -321,6 +327,9 @@
       const value = clean(node.textContent), parent = node.parentElement;
       if (!value || !parent || parent.closest('script,style,noscript,template')) continue;
       if (!deepVisible(parent)) continue;
+      // A contenteditable "Card number" is masked in the element table; its text must not come
+      // back through the page text instead (the third review read the card number here).
+      if (parent.isContentEditable && secretEditable(parent)) continue;
       range.selectNodeContents(node);
       const r = range.getBoundingClientRect();
       if (r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth) {
@@ -698,10 +707,27 @@
   };
   const PRESSABLE = 'button,input[type="submit"],input[type="image"],input[type="button"],[role="button"]';
   const pressable = x => x.matches && x.matches(PRESSABLE);
+  // Anything a click or Enter activates. Links and menu items are here because Enter on a
+  // focused one follows it exactly as a click does.
+  const ACTIVATABLE = PRESSABLE + ',a[href],[role="link"],[role="menuitem"],[role="menuitemradio"],'
+    + '[role="menuitemcheckbox"],[role="tab"],[role="option"],summary';
+  const activatable = x => x && x.nodeType === 1 && x.matches && x.matches(ACTIVATABLE);
+  // Text drawn by CSS (`.pay::before { content: 'Pay now' }`) is on screen and in no DOM text.
+  const drawnText = x => {
+    const out = [];
+    for (const n of [x, ...x.querySelectorAll('*')].slice(0, 12)) {
+      for (const which of ['::before', '::after']) {
+        let c = '';
+        try { c = getComputedStyle(n, which).content; } catch (_) { c = ''; }
+        if (c && c !== 'none' && c !== 'normal') out.push(c.replace(/^["']|["']$/g, ''));
+      }
+    }
+    return out.join(' ');
+  };
   // Every name a button goes by. The rail must match on what the user sees as well as the accessible
   // name: `<input type=submit value="Pay now" aria-label="Continue">` says Pay now on screen.
   const pressNames = x => {
-    const names = [nameOf(x), x.innerText, rawAttr(x, 'alt'), rawAttr(x, 'title')];
+    const names = [nameOf(x), x.innerText, rawAttr(x, 'alt'), rawAttr(x, 'title'), drawnText(x)];
     if (FLAT.includes(typeOf(x))) names.push(x.value);
     // A design-system button: the real <button> lives in a shadow root and its text is slotted in.
     const root = x.getRootNode && x.getRootNode();
@@ -709,6 +735,24 @@
     return names.map(n => clean(n).slice(0, 120)).filter(Boolean);
   };
   const liveButtons = scope => deepAll(scope).filter(x => pressable(x) && deepVisible(x) && !disabled(x));
+  const parentOf = n => n.parentElement
+    || (n.getRootNode && n.getRootNode() instanceof ShadowRoot ? n.getRootNode().host : null);
+  // A click on an element is a click on every activatable ancestor it bubbles through: a decoy
+  // "Continue" inside the "Pay now" button pays.
+  const pressNamesUp = e => {
+    const names = pressNames(e);
+    for (let n = parentOf(e), hops = 0; n && hops < 16 && n !== document.body; n = parentOf(n), hops += 1) {
+      if (activatable(n)) names.push(...pressNames(n));
+    }
+    return [...new Set(names)];
+  };
+  // The control implicit submission presses: the form's first submit button, in tree order.
+  const isSubmitControl = x => (x.tagName === 'BUTTON' && !['button', 'reset'].includes(typeOf(x)))
+    || (x.tagName === 'INPUT' && ['submit', 'image'].includes(typeOf(x)));
+  const defaultButton = form => {
+    for (const x of form.elements) if (isSubmitControl(x)) return x;
+    return null;
+  };
 
   // The names of the controls Enter in this field could stand in for.
   //
@@ -721,43 +765,35 @@
   // `null` (not `[]`) when the ref is gone: "nothing to confirm" and "could not look" differ.
   const submittersOf = e => {
     if (!e || !e.isConnected) return null;
-    const chain = hostChain(e);
-    const scopes = new Set();
-    for (const n of chain) {
-      const form = n.form || (n.closest && n.closest('form'));
-      if (form) scopes.add(form);
-      const dialog = n.closest && n.closest('dialog,[role="dialog"],[role="alertdialog"]');
-      if (dialog) scopes.add(dialog);
-    }
     const found = new Set();
-    // In a form, implicit submission can only press a submit control, so a `type=button` "Buy now"
-    // elsewhere in an ASP.NET-style whole-page form is not what Enter sends. A dialog's page handler
-    // can press any of its buttons.
-    const submitsForm = x => !(x.tagName === 'BUTTON' && ['button', 'reset'].includes(typeOf(x)))
-      && !(x.tagName === 'INPUT' && ['button', 'reset'].includes(typeOf(x)));
-    for (const scope of scopes) {
-      const all = liveButtons(scope);
-      for (const x of (scope.tagName === 'FORM' ? all.filter(submitsForm) : all)) found.add(x);
-      // `form=` attributes put a form's buttons anywhere in the document.
-      if (scope.tagName === 'FORM') {
-        for (const x of scope.elements) if (pressable(x) && submitsForm(x) && deepVisible(x) && !disabled(x)) found.add(x);
+    for (const n of hostChain(e)) {
+      const form = n.form || (n.closest && n.closest('form'));
+      if (form) {
+        // Implicit submission presses the default button and nothing else. With none, the form
+        // submits as a whole, which is as good as pressing any of its buttons.
+        const primary = defaultButton(form);
+        if (primary) {
+          if (!disabled(primary)) found.add(primary);
+        } else {
+          liveButtons(form).forEach(x => found.add(x));
+        }
       }
+      // A dialog's own Enter handler can press any button in it.
+      const dialog = n.closest && n.closest('dialog,[role="dialog"],[role="alertdialog"]');
+      if (dialog) liveButtons(dialog).forEach(x => found.add(x));
     }
-    if (!scopes.size) {
-      let n = e;
-      for (let hops = 0; hops < 8; hops += 1) {
-        const up = n.parentElement || (n.getRootNode && n.getRootNode() instanceof ShadowRoot ? n.getRootNode().host : null);
-        if (!up || up === document.body || up === document.documentElement) break;
-        n = up;
-        const near = liveButtons(n);
-        if (near.length) { near.forEach(x => found.add(x)); break; }
-      }
-    }
+    // Everything else a page's Enter handler might press is caught when it happens: see `arm`.
     return [...new Set([...found].flatMap(pressNames))];
   };
   const submitters = ref => submittersOf(nodeFor(ref));
   // Every name one control goes by (accessible name, visible text, value, alt), for the click rail.
-  const pressNamesOf = ref => { const e = nodeFor(ref); return e && e.isConnected ? pressNames(e) : null; };
+  const pressNamesOf = ref => { const e = nodeFor(ref); return e && e.isConnected ? pressNamesUp(e) : null; };
+  // Whether `type` may write into this ref. Clicking is what `type` does first, so a `type` aimed at
+  // a button is a click that the click rail never saw.
+  const editable = ref => {
+    const e = nodeFor(ref);
+    return !!(e && e.isConnected && (isEditable(e) || e.isContentEditable));
+  };
 
   // What pressing Enter or Space *now* would press: the focused button itself, or whatever the
   // focused field submits. For `keys`, which has no ref and presses into whatever has focus.
@@ -772,14 +808,54 @@
       }
     } catch (_) { return null; }
     if (!e || e === e.ownerDocument.body || e === e.ownerDocument.documentElement) return [];
-    if (pressable(e)) return pressNames(e);
-    return submittersOf(e);
+    const field = isEditable(e) || e.isContentEditable || e.tagName === 'TEXTAREA';
+    return field ? submittersOf(e) : pressNamesUp(e);
   };
+
+  // The tripwire. Where a key press or a click *leads* cannot be read off the layout: a page's own
+  // handler can press a button anywhere. So while an unconfirmed input is dispatched, any click or
+  // form submission that would activate a control matching a confirmation rule is cancelled before
+  // the page sees it, and reported. Capture phase on the window, so it runs before every handler
+  // below it; cancelling a click also cancels the submission it would have started.
+  const INVISIBLE = /[\u200b\u200c\u200d\u2060\ufeff\u00ad]/g;
+  const normalName = s => String(s || '').normalize('NFKC').replace(INVISIBLE, '').toLowerCase();
+  const TRIP = { rules: null, hits: [] };
+  const tripNames = ev => {
+    if (ev.type === 'submit') {
+      const form = ev.target;
+      if (ev.submitter) return pressNamesUp(ev.submitter);
+      return form && form.tagName === 'FORM' ? liveButtons(form).flatMap(pressNames) : [];
+    }
+    const names = [];
+    for (const n of (ev.composedPath ? ev.composedPath() : [ev.target])) {
+      if (activatable(n)) names.push(...pressNames(n));
+    }
+    return names;
+  };
+  const tripCheck = ev => {
+    if (!TRIP.rules) return;
+    let hit = null;
+    try { hit = tripNames(ev).find(n => TRIP.rules.some(rule => rule.test(normalName(n)))); } catch (_) { hit = null; }
+    if (hit) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+      TRIP.hits.push(clean(hit).slice(0, 120));
+    }
+  };
+  W.addEventListener('click', tripCheck, true);
+  W.addEventListener('submit', tripCheck, true);
+  const arm = patterns => {
+    TRIP.rules = patterns.map(p => new RegExp(p, 'i'));
+    TRIP.hits = [];
+    return true;
+  };
+  const disarm = () => { const hits = TRIP.hits; TRIP.rules = null; TRIP.hits = []; return hits; };
 
   const stats = () => ({ refs: S.nodes.size, next: S.next, hasSnap: !!S.snap });
 
   W.__jevMcp = {
     version: VERSION, readState, verify, reinspect, resolve, scrollTo, selectOption,
-    settle, label, active, submitters, pressTargets, pressNamesOf, stats, keyOf, guardOf,
+    settle, label, active, submitters, pressTargets, pressNamesOf, editable, arm, disarm, stats,
+    keyOf, guardOf,
   };
 })();

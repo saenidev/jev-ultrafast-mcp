@@ -84,19 +84,19 @@
       {
         "name": "Delete account",
         "role": "button",
-        "confirm": "matches confirmation rule '\\\\bdelete\\\\s+(account|workspace|repository|project)\\\\b'",
+        "confirm": "matches confirmation rule '\\\\bdelete\\\\b'",
         "secret": false
       },
       {
         "name": "Buy now",
         "role": "button",
-        "confirm": "matches confirmation rule '\\\\bbuy\\\\s+now\\\\b'",
+        "confirm": "matches confirmation rule '\\\\bbuy\\\\b'",
         "secret": false
       },
       {
         "name": "Place order",
         "role": "button",
-        "confirm": "matches confirmation rule '\\\\bplace\\\\s+order\\\\b'",
+        "confirm": "matches confirmation rule '\\\\bplace\\\\s+(your\\\\s+)?order\\\\b'",
         "secret": false
       },
       {
@@ -114,13 +114,73 @@
       {
         "name": "Cancel order",
         "role": "tab",
-        "confirm": "matches confirmation rule '\\\\bcancel\\\\s+(order|subscription|booking)\\\\b'",
+        "confirm": "matches confirmation rule '\\\\bcancel\\\\s+(my\\\\s+|your\\\\s+)?(order|subscription|booking|membership|plan|account)\\\\b'",
         "secret": false
       },
       {
         "name": "Send money",
         "role": "button",
         "confirm": "matches confirmation rule '\\\\bsend\\\\s+(money|payment)\\\\b'",
+        "secret": false
+      },
+      {
+        "name": "Place your order",
+        "role": "button",
+        "confirm": "matches confirmation rule '\\\\bplace\\\\s+(your\\\\s+)?order\\\\b'",
+        "secret": false
+      },
+      {
+        "name": "Pay",
+        "role": "button",
+        "confirm": "matches confirmation rule '\\\\bpay\\\\b'",
+        "secret": false
+      },
+      {
+        "name": "Delete",
+        "role": "menuitem",
+        "confirm": "matches confirmation rule '\\\\bdelete\\\\b'",
+        "secret": false
+      },
+      {
+        "name": "Confirm and pay",
+        "role": "button",
+        "confirm": "matches confirmation rule '\\\\bpay\\\\b'",
+        "secret": false
+      },
+      {
+        "name": "Cancel my subscription",
+        "role": "link",
+        "confirm": "matches confirmation rule '\\\\bcancel\\\\s+(my\\\\s+|your\\\\s+)?(order|subscription|booking|membership|plan|account)\\\\b'",
+        "secret": false
+      },
+      {
+        "name": "Pay​ now",
+        "role": "button",
+        "confirm": "matches confirmation rule '\\\\bpay\\\\b'",
+        "secret": false
+      },
+      {
+        "name": "Ｐａｙ now",
+        "role": "button",
+        "confirm": "matches confirmation rule '\\\\bpay\\\\b'",
+        "secret": false
+      },
+      {
+        "name": "PayPal",
+        "role": "button",
+        "confirm": null,
+        "secret": false
+      },
+      {
+        "name": "Payment methods",
+        "role": "link",
+        "confirm": null,
+        "secret": false
+      },
+      {
+        "name": "Add to cart",
+        "role": "button",
+        "confirm": null,
         "secret": false
       },
       {
@@ -138,7 +198,7 @@
       {
         "name": "Buy now",
         "role": "",
-        "confirm": "matches confirmation rule '\\\\bbuy\\\\s+now\\\\b'",
+        "confirm": "matches confirmation rule '\\\\bbuy\\\\b'",
         "secret": false
       }
     ],
@@ -455,7 +515,7 @@
           "ref": "e5",
           "target": "Buy now",
           "error": "needs_confirmation",
-          "detail": "matches confirmation rule '\\\\bbuy\\\\s+now\\\\b'; re-send with \"confirm\": true to proceed"
+          "detail": "matches confirmation rule '\\\\bbuy\\\\b'; re-send with \"confirm\": true to proceed"
         },
         "calls": []
       }
@@ -524,7 +584,7 @@
           "ref": "e5",
           "target": "Delete account",
           "error": "needs_confirmation",
-          "detail": "matches confirmation rule '\\\\bdelete\\\\s+(account|workspace|repository|project)\\\\b'; re-send with \"confirm\": true to proceed"
+          "detail": "matches confirmation rule '\\\\bdelete\\\\b'; re-send with \"confirm\": true to proceed"
         },
         "calls": []
       }
@@ -958,6 +1018,197 @@
       }
     },
     {
+      "why": "type aimed at something that is not a text field is refused",
+      "platform": "mac",
+      "op": {
+        "op": "type",
+        "ref": "e5",
+        "text": ""
+      },
+      "dry_run": false,
+      "script": {
+        "label": "Pay now",
+        "editable": false
+      },
+      "expected": {
+        "step": {
+          "op": "type",
+          "ok": false,
+          "ref": "e5",
+          "target": "Pay now",
+          "error": "invalid_request",
+          "detail": "e5 is not a text field; use click for a button or link"
+        },
+        "calls": []
+      }
+    },
+    {
+      "why": "the page pressed a guarded button while a click ran",
+      "platform": "mac",
+      "op": {
+        "op": "click",
+        "ref": "e5"
+      },
+      "dry_run": false,
+      "script": {
+        "label": "Save",
+        "tripped": [
+          "Delete repository"
+        ]
+      },
+      "expected": {
+        "step": {
+          "op": "click",
+          "ok": false,
+          "ref": "e5",
+          "target": "Save",
+          "error": "needs_confirmation",
+          "detail": "the page tried to press 'Delete repository', which matches a confirmation rule; it was stopped before it ran. Re-send with \"confirm\": true to proceed"
+        },
+        "calls": [
+          {
+            "method": "Input.dispatchMouseEvent",
+            "params": {
+              "type": "mouseMoved"
+            }
+          },
+          {
+            "method": "Input.dispatchMouseEvent",
+            "params": {
+              "type": "mousePressed",
+              "button": "left",
+              "clickCount": 1
+            }
+          },
+          {
+            "method": "Input.dispatchMouseEvent",
+            "params": {
+              "type": "mouseReleased",
+              "button": "left",
+              "clickCount": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "why": "the page pressed a guarded button while Enter ran in a field",
+      "platform": "mac",
+      "op": {
+        "op": "type",
+        "ref": "e5",
+        "text": "",
+        "clear": false,
+        "submit": true
+      },
+      "dry_run": false,
+      "script": {
+        "tripped": [
+          "Delete repository"
+        ]
+      },
+      "expected": {
+        "step": {
+          "op": "type",
+          "ok": false,
+          "ref": "e5",
+          "target": "Search",
+          "error": "needs_confirmation",
+          "detail": "the page tried to press 'Delete repository', which matches a confirmation rule; it was stopped before it ran. Re-send with \"confirm\": true to proceed"
+        },
+        "calls": [
+          {
+            "method": "Input.dispatchMouseEvent",
+            "params": {
+              "type": "mousePressed",
+              "button": "left",
+              "clickCount": 1
+            }
+          },
+          {
+            "method": "Input.dispatchMouseEvent",
+            "params": {
+              "type": "mouseReleased",
+              "button": "left",
+              "clickCount": 1
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "text": "\r",
+              "unmodifiedText": "\r",
+              "key": "Enter",
+              "code": "Enter",
+              "windowsVirtualKeyCode": 13,
+              "nativeVirtualKeyCode": 13,
+              "modifiers": 0
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "key": "Enter",
+              "code": "Enter",
+              "windowsVirtualKeyCode": 13,
+              "nativeVirtualKeyCode": 13,
+              "modifiers": 0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "why": "a confirmed click is not tripwired",
+      "platform": "mac",
+      "op": {
+        "op": "click",
+        "ref": "e5",
+        "confirm": true
+      },
+      "dry_run": false,
+      "script": {
+        "label": "Save",
+        "tripped": [
+          "Delete repository"
+        ]
+      },
+      "expected": {
+        "step": {
+          "op": "click",
+          "ok": true,
+          "ref": "e5",
+          "target": "Save"
+        },
+        "calls": [
+          {
+            "method": "Input.dispatchMouseEvent",
+            "params": {
+              "type": "mouseMoved"
+            }
+          },
+          {
+            "method": "Input.dispatchMouseEvent",
+            "params": {
+              "type": "mousePressed",
+              "button": "left",
+              "clickCount": 1
+            }
+          },
+          {
+            "method": "Input.dispatchMouseEvent",
+            "params": {
+              "type": "mouseReleased",
+              "button": "left",
+              "clickCount": 1
+            }
+          }
+        ]
+      }
+    },
+    {
       "why": "submitting a field whose form's button needs confirming",
       "platform": "mac",
       "op": {
@@ -981,7 +1232,7 @@
           "ref": "e5",
           "target": "Amount",
           "error": "needs_confirmation",
-          "detail": "Enter would submit 'Pay now', which matches confirmation rule '\\\\bpay\\\\s+now\\\\b'; re-send with \"confirm\": true to proceed"
+          "detail": "Enter would submit 'Pay now', which matches confirmation rule '\\\\bpay\\\\b'; re-send with \"confirm\": true to proceed"
         },
         "calls": []
       }
@@ -1103,7 +1354,7 @@
           "ref": "e5",
           "target": "Amount",
           "error": "needs_confirmation",
-          "detail": "Enter would submit 'Pay now', which matches confirmation rule '\\\\bpay\\\\s+now\\\\b'; re-send with \"confirm\": true to proceed"
+          "detail": "Enter would submit 'Pay now', which matches confirmation rule '\\\\bpay\\\\b'; re-send with \"confirm\": true to proceed"
         },
         "calls": []
       }
@@ -1316,7 +1567,7 @@
           "ref": "e5",
           "target": "Delete account",
           "error": "needs_confirmation",
-          "detail": "matches confirmation rule '\\\\bdelete\\\\s+(account|workspace|repository|project)\\\\b'; re-send with \"confirm\": true to proceed"
+          "detail": "matches confirmation rule '\\\\bdelete\\\\b'; re-send with \"confirm\": true to proceed"
         },
         "calls": []
       }
@@ -1516,7 +1767,7 @@
           "op": "keys",
           "ok": false,
           "error": "needs_confirmation",
-          "detail": "that key would press 'Pay now', which matches confirmation rule '\\\\bpay\\\\s+now\\\\b'; re-send with \"confirm\": true to proceed"
+          "detail": "that key would press 'Pay now', which matches confirmation rule '\\\\bpay\\\\b'; re-send with \"confirm\": true to proceed"
         },
         "calls": []
       }
@@ -1542,7 +1793,7 @@
           "op": "keys",
           "ok": false,
           "error": "needs_confirmation",
-          "detail": "that key would press 'Pay now', which matches confirmation rule '\\\\bpay\\\\s+now\\\\b'; re-send with \"confirm\": true to proceed"
+          "detail": "that key would press 'Pay now', which matches confirmation rule '\\\\bpay\\\\b'; re-send with \"confirm\": true to proceed"
         },
         "calls": []
       }
@@ -2256,7 +2507,7 @@
     }
   ],
   "tables": {
-    "helper_version": 13,
+    "helper_version": 14,
     "threshold": 0.7,
     "modifiers": {
       "alt": 1,
@@ -2406,15 +2657,16 @@
       "out_of_viewport"
     ],
     "confirm_patterns": [
-      "\\bdelete\\s+(account|workspace|repository|project)\\b",
-      "\\bpay\\s+now\\b",
-      "\\bplace\\s+order\\b",
-      "\\bcomplete\\s+purchase\\b",
-      "\\bbuy\\s+now\\b",
-      "\\bcancel\\s+(order|subscription|booking)\\b",
+      "\\bdelete\\b",
+      "\\bpay\\b",
+      "\\bbuy\\b",
+      "\\bplace\\s+(your\\s+)?order\\b",
+      "\\bcomplete\\s+(purchase|order)\\b",
+      "\\bpurchase\\s+now\\b",
+      "\\bcancel\\s+(my\\s+|your\\s+)?(order|subscription|booking|membership|plan|account)\\b",
       "\\bunsubscribe\\b",
       "\\b(close|delete)\\s+permanently\\b",
-      "\\bconfirm\\s+(payment|order|transfer)\\b",
+      "\\bconfirm\\s+(and\\s+)?(pay|payment|order|purchase|transfer|booking)\\b",
       "\\bsend\\s+(money|payment)\\b",
       "\\bwithdraw\\b",
       "\\btransfer\\s+funds\\b"

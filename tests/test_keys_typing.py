@@ -71,6 +71,8 @@ class RecordingCdp:
         # fake was found.
         if "readyState" in expression:
             return "complete"
+        if "arm(" in expression:
+            return [] if "disarm(" in expression else True
         return None
 
     def inserted(self) -> list[str]:

@@ -23,6 +23,7 @@ import httpx
 
 from .config import Config
 from .observe import Observation
+from .safety import confirm_reason
 
 # The endpoint comes from Config: TypeSafe direct by default, or OpenRouter's
 # Decisions route when TYPESAFE_BASE_URL points there. Same contract either way.
@@ -381,6 +382,31 @@ under after before about than when where which what who how them they their ther
 """.split())
 
 
+def model_url(url: str) -> str:
+    """A URL as the models may see it: scheme, host and path, no query or fragment.
+
+    A GET form puts what was typed into the query string -- the third review's login form sent
+    `?user=bob&pw=hunter2-pw` to the decision model and kept it in `earlier_pages`. The path is
+    enough to say where the page is.
+    """
+    return re.split(r"[?#]", url or "", maxsplit=1)[0]
+
+
+# Runs of digits long enough to be a card, account or recovery number (spaces and dashes allowed
+# between groups), and codes that follow a word naming them as secret.
+_LONG_NUMBER = re.compile(r"\b\d(?:[ -]?\d){11,}\b")
+_NAMED_CODE = re.compile(
+    r"(?i)\b(password|passcode|pin|otp|one[- ]?time (?:code|password)|verification code|"
+    r"security code|recovery code|backup code|cvv|cvc|api key|access token|secret)"
+    r"(\s*[:#=]?\s*)([A-Za-z0-9][A-Za-z0-9-]{3,})")
+
+
+def model_text(text: str) -> str:
+    """Page text as the models may see it, with card-length numbers and named codes masked."""
+    text = _LONG_NUMBER.sub("[number]", text or "")
+    return _NAMED_CODE.sub(lambda m: m.group(1) + m.group(2) + "[hidden]", text)
+
+
 def goal_terms(goal: str) -> tuple[str, ...]:
     """Distinctive words of a goal, for the observer to keep matching controls within the cap."""
     words = re.findall(r"[^\W_]{3,}", goal.lower())
@@ -515,7 +541,8 @@ def choose(cfg: Config, observation: Observation, goal: str, history: list[dict]
         }
 
     state = {
-        "page": {"url": observation.url, "title": observation.title, "text": observation.text},
+        "page": {"url": model_url(observation.url), "title": observation.title,
+                 "text": model_text(observation.text)},
         "elements": [
             {"ref": element.ref, "role": element.role, "name": element.name, "value": element.value,
              **({"opens_on": "hover"} if element.hoverable else {}),
@@ -526,10 +553,13 @@ def choose(cfg: Config, observation: Observation, goal: str, history: list[dict]
              **({"disabled": True} if element.disabled else {})}
             for element in observation.elements
         ],
-        "recent_actions": history[-10:],
+        "recent_actions": [{**item, "where": model_url(item["where"])} if item.get("where") else item
+                           for item in history[-10:]],
         # Pages this goal already visited, oldest first: what was read there (a reference
         # number, a price) is only visible here once the page has changed.
-        **({"earlier_pages": pages_seen} if pages_seen else {}),
+        **({"earlier_pages": [{**page, "url": model_url(page.get("url", "")),
+                                "text": model_text(page.get("text", ""))} for page in pages_seen]}
+           if pages_seen else {}),
         # Every step this goal has completed, oldest first, with the page it was taken on.
         **({"done_so_far": done_so_far} if done_so_far else {}),
     }
@@ -575,6 +605,13 @@ def choose(cfg: Config, observation: Observation, goal: str, history: list[dict]
             f"Decision model chose {target_answer['choice']!r}, which is not an offered "
             "target; no action executed."
         )
+    if overrode and confirm_reason(cfg, element.name, element.role):
+        # The override exists to get past a timid BLOCKED on an ordinary step. It never picks a
+        # payment, order or deletion: the third review had it click "Place your order" on a goal
+        # that said not to buy anything.
+        decision["operation"] = "BLOCKED"
+        decision.pop("overrode", None)
+        return decision
     decision["ref"] = element.ref
     decision["target"] = element.name
     decision["target_confidence"] = target_answer["confidence"]
@@ -695,7 +732,7 @@ def text_for(cfg: Config, goal: str, element, observation: Observation,
     context = {
         "goal": goal,
         "field": {"name": element.name, "role": element.role, "current": element.value},
-        "page": {"title": observation.title, "text": observation.text[:6000]},
+        "page": {"title": observation.title, "text": model_text(observation.text)[:6000]},
         "recent_actions": history[-6:],
     }
     result = _hedged_post(base + "/chat/completions", cfg.text_model_key, {

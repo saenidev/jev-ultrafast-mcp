@@ -67,6 +67,16 @@ GUARD_CASES = [
     ("Withdraw funds", "menuitem"),
     ("Cancel order", "tab"),
     ("Send money", "button"),
+    ("Place your order", "button"),
+    ("Pay", "button"),
+    ("Delete", "menuitem"),
+    ("Confirm and pay", "button"),
+    ("Cancel my subscription", "link"),
+    ("Pay\u200b now", "button"),
+    ("\uff30\uff41\uff59 now", "button"),
+    ("PayPal", "button"),
+    ("Payment methods", "link"),
+    ("Add to cart", "button"),
     # The role gate: a confirmation rule on something that is not a button/link/menuitem/tab is not
     # a click this needs to stop, so the role is the thing that decides it.
     ("Buy now", "textbox"),
@@ -159,6 +169,11 @@ class ScriptedCdp:
         self.focused: dict = {"focused": False}
         # What Enter in the field would submit: the names of its form's buttons.
         self.submitters: list | None = []
+        # Whether the ref is a text field (`type` refuses anything else).
+        self.editable: bool = True
+        # What the in-page tripwire caught while the op ran: names of guarded controls the page
+        # tried to press. Empty on an ordinary page.
+        self.tripped: list = []
 
     # `Session._call` and `Session._safe_eval` are the only two entry points used.
     def call(self, method, session_id=None, timeout=None, **params):
@@ -196,6 +211,12 @@ def reply_for(cdp: ScriptedCdp, expression: str):
         return "some body text"
     if "settle(" in expression:
         return None
+    if "disarm(" in expression:
+        return cdp.tripped
+    if "arm(" in expression:
+        return True
+    if "editable(" in expression:
+        return cdp.editable
     return None
 
 
@@ -234,6 +255,16 @@ SCENARIOS: list[dict] = [
     {"why": "typing without clearing first, one key at a time",
      "op": {"op": "type", "ref": "e5", "text": "ab", "clear": False, "slow": True}},
     {"why": "typing and submitting", "op": {"op": "type", "ref": "e5", "text": "ab", "submit": True}},
+    {"why": "type aimed at something that is not a text field is refused",
+     "op": {"op": "type", "ref": "e5", "text": ""}, "label": "Pay now", "editable": False},
+    {"why": "the page pressed a guarded button while a click ran",
+     "op": {"op": "click", "ref": "e5"}, "label": "Save", "tripped": ["Delete repository"]},
+    {"why": "the page pressed a guarded button while Enter ran in a field",
+     "op": {"op": "type", "ref": "e5", "text": "", "clear": False, "submit": True},
+     "tripped": ["Delete repository"]},
+    {"why": "a confirmed click is not tripwired",
+     "op": {"op": "click", "ref": "e5", "confirm": True}, "label": "Save",
+     "tripped": ["Delete repository"]},
     # Enter submits the field's form as its default button would, so it answers to the click rail.
     {"why": "submitting a field whose form's button needs confirming",
      "op": {"op": "type", "ref": "e5", "text": "", "clear": False, "submit": True},
@@ -393,6 +424,10 @@ def scenario_case(scenario: dict) -> dict:
         cdp.focused = scenario["focused"]
     if "submitters" in scenario:
         cdp.submitters = scenario["submitters"]
+    if "editable" in scenario:
+        cdp.editable = scenario["editable"]
+    if "tripped" in scenario:
+        cdp.tripped = scenario["tripped"]
     platform = scenario.get("platform", "mac")
     session = browser.Session(name="fixture", cfg=Config(), cdp=cdp)
     with platform_as(platform):
@@ -411,7 +446,8 @@ def scenario_case(scenario: dict) -> dict:
         "op": scenario["op"],
         "dry_run": scenario.get("dry_run", False),
         # What the scripted page had to say, so the other side can set up the same page.
-        "script": {key: scenario[key] for key in ("label", "guard", "select", "focused", "submitters")
+        "script": {key: scenario[key] for key in ("label", "guard", "select", "focused", "submitters",
+                                                  "editable", "tripped")
                    if key in scenario},
         "expected": {
             "step": report,
