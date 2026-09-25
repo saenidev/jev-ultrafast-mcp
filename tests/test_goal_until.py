@@ -191,3 +191,45 @@ def test_an_empty_until_is_no_until(monkeypatch, empty):
 def test_until_is_documented_in_the_tool():
     doc = server.browser_goal.__doc__ or ""
     assert "until" in doc and "until: met after" in doc
+
+
+def _popup_page(text: str, *, options: bool = False, dialog: bool = False) -> Observation:
+    page = _page(text)
+    elements = list(page.elements)
+    if options:
+        elements.append(Element(ref="e9", role="option", name="Suvarnabhumi Airport (BKK)"))
+    overlays = [{"role": "dialog", "name": "Departure calendar", "modal": True}] if dialog else []
+    return dataclasses.replace(page, elements=elements, overlays=overlays)
+
+
+def test_until_waits_while_the_action_left_suggestions_open(monkeypatch):
+    """Measured on Google Flights: `field_shows Where from? BKK` held right after typing BKK,
+    with the suggestion list still open, so the subgoal ended before the suggestion was clicked
+    and the next subgoal started inside the popup."""
+    session = _Session([_page("Form"), _popup_page("Typed BKK", options=True), _page("Typed BKK")])
+
+    out, asked = _run(monkeypatch, session, [_click(), _click(), _click()],
+                      until=[{"type": "text_contains", "text": "Typed BKK"}])
+
+    assert "until: met after 2 steps" in out, out
+    assert len(session.acts) == 2
+
+
+def test_until_waits_while_the_action_left_a_new_dialog_open(monkeypatch):
+    """A date typed into a calendar dialog is not set until the dialog is closed (Done)."""
+    session = _Session([_page("Form"), _popup_page("Oct 15", dialog=True), _page("Oct 15")])
+
+    out, asked = _run(monkeypatch, session, [_click(), _click(), _click()],
+                      until=[{"type": "text_contains", "text": "Oct 15"}])
+
+    assert "until: met after 2 steps" in out, out
+
+
+def test_until_accepts_a_dialog_that_was_already_open_when_the_goal_began(monkeypatch):
+    """A subgoal that works inside an already open dialog may end with it still open."""
+    session = _Session([_popup_page("Form", dialog=True), _popup_page("Oct 15", dialog=True)])
+
+    out, asked = _run(monkeypatch, session, [_click(), _click()],
+                      until=[{"type": "text_contains", "text": "Oct 15"}])
+
+    assert "until: met after 1 step" in out, out

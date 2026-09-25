@@ -524,6 +524,13 @@ STALE_REF_REASONS = {"detached", "page_changed", "target_changed", "unknown_ref"
 STALE_REF_RETRIES = 3
 
 
+def _open_popups(observation: Observation) -> tuple[bool, set[str]]:
+    """(suggestions showing, names of open dialogs) -- what `until` must not end a goal inside."""
+    suggestions = any(e.role in policy.SUGGESTION_ROLES for e in observation.elements)
+    dialogs = {f"{o.get('role')}:{o.get('name')}" for o in (observation.overlays or [])}
+    return suggestions, dialogs
+
+
 @SERVER.tool(annotations=WRITES)
 def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: int = 20,
                  verify: list[dict] | None = None, verbose: bool = False,
@@ -597,6 +604,8 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
         if until_checks:
             until_result = assertions_mod.run(until_checks, observation, allow_js=False)
             until_initially = until_result["pass"]
+            # Popups this goal found already open may stay open when it ends (it works inside them).
+            dialogs_at_start = _open_popups(observation)[1]
             if until_initially:
                 trace.append("  -   until: already true before the first step; the model "
                              "still decides it")
@@ -767,7 +776,16 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                 # The page the loop already holds: no extra read. After an action whose checks
                 # fail there is no wait here either -- the next decision can be WAIT.
                 until_result = assertions_mod.run(until_checks, observation, allow_js=False)
-                if until_result["pass"]:
+                suggestions, dialogs = _open_popups(observation)
+                pending = suggestions or bool(dialogs - dialogs_at_start)
+                if until_result["pass"] and pending:
+                    # Measured on Google Flights: "Where from? shows BKK" held right after typing,
+                    # with the suggestion list still open, and a typed date held with the calendar
+                    # still open. Ending there left the next subgoal inside the popup. The action
+                    # that opened it is not finished until it is closed; the next decision is.
+                    trace.append("  -   until: checks pass but a suggestion list or new dialog "
+                                 "is still open; continuing")
+                elif until_result["pass"]:
                     until_met_at = steps
                     status = "done"
                     trace.append(f"  =   until: all {len(until_checks)} checks pass after step "
