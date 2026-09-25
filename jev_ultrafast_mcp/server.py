@@ -201,6 +201,9 @@ def _error(exc: Exception) -> str:
 PAGE_NOTES = 4          # pages remembered per goal
 WEAK_BLOCKED_OVERRIDES = 3  # per goal: a weak BLOCKED replaced by a near-tied action
 DONE_SO_FAR_LIMIT = 40  # completed steps sent with each decision (one short line each)
+# Steps of this run passed to each decision as `history`. The model is shown the last ten; the
+# rest is there so `policy.loop_targets` can see three laps of a four-target cycle.
+HISTORY_WINDOW = max(10, policy.LOOP_WINDOW + 4)
 PAGE_NOTE_CHARS = 700   # of each page's text
 
 
@@ -513,6 +516,7 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
         submitted_value: dict[int, str] = {}  # this run's SUBMIT steps -> the value sent
         acted_on: dict[int, str] = {}  # this run's steps -> title of the page they were taken on
         valueless_at: dict[int, str] = {}  # this run's no-value and refused-Enter steps -> page URL
+        page_at: dict[int, str] = {}  # this run's steps -> path of the page they were taken on
         started = time.perf_counter()
         if url:
             tab.navigate(url)
@@ -528,13 +532,23 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
         browser_ms = 0   # time spent waiting on the page
         tokens = 0
         while steps < max_steps:
+            recent = tab.history[run_start:][-HISTORY_WINDOW:]
             history = [{"op": step.op, "ref": step.ref, "target": step.target, "ok": step.ok,
                         **({"error": step.error} if step.error else {}),
-                        **({"where": valueless_at[id(step)]} if id(step) in valueless_at else {})}
-                       for step in tab.history[run_start:][-10:]]
-            for item, step in zip(history, tab.history[run_start:][-10:]):
+                        **({"where": valueless_at[id(step)]} if id(step) in valueless_at else {}),
+                        # For cycle detection only; `policy.choose` never sends it to a model.
+                        **({"page": page_at[id(step)]} if id(step) in page_at else {})}
+                       for step in recent]
+            for item, step in zip(history, recent):
                 if id(step) in submitted_value:
                     item["submitted"] = submitted_value[id(step)]
+            if policy.loop_exhausted(history, observation.url):
+                # The cycle's targets were withdrawn two laps ago and the steps still went round
+                # a third time. More of the same is what burned fifty steps on a live calendar.
+                trace.append("  !   the same targets went round a third time on this page; "
+                             "stopping instead of looping")
+                status = "stopped: looping"
+                break
             # `history` is the last ten steps; a checkout is twenty-five. Measured: once "Add to
             # cart" on the kettle's page scrolled out of it, the model re-added the kettle or went
             # to checkout without the board. So every step this goal completed goes along too,
@@ -558,6 +572,10 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
             model_ms += decision.get("latency_ms") or 0
             tokens += _tokens(decision.get("usage"))
             operation = decision["operation"]
+            if decision.get("loop"):
+                looped = "; ".join(f"{name} {', '.join(refs)}"
+                                   for name, refs in decision["loop"].items())
+                trace.append(f"  -   looping among {looped}: withdrawn for this decision")
             if decision.get("overrode"):
                 weak_blocked_left -= 1
                 probabilities = decision.get("probabilities") or {}
@@ -596,6 +614,7 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                     tab.history.append(Step(op="type", ok=False, ref=decision["ref"],
                                             target=decision.get("target"),
                                             error=policy.NO_VALUE_ERROR, detail=str(exc)))
+                    page_at[id(tab.history[-1])] = policy.model_url(observation.url)
                     # Where it was refused, so the withdrawal applies to this field on this
                     # page in this run only: refs restart per document, and a later goal
                     # may well have a value for the same box.
@@ -617,10 +636,13 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
             steps += 1
             chosen = observation.by_ref.get(decision.get("ref") or "")
             acting_on = (observation.title, (chosen.name if chosen else "") or decision.get("target") or "")
+            before = len(tab.history)
             payload = tab.act([op], stop_on_error=False, observe_after=True)
             step_result = payload["ops"][0]
             if tab.history:
                 acted_on[id(tab.history[-1])] = acting_on
+            if len(tab.history) > before:
+                page_at[id(tab.history[-1])] = policy.model_url(observation.url)
             error = step_result.get("error") or ""
             # The guard refusing a stale ref is right; believing it was fatal is
             # what stopped the goal. Without this the same goal succeeds or fails

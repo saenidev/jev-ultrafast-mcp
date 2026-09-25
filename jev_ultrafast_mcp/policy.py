@@ -55,6 +55,8 @@ first (accept or close it); it is never by itself a reason for BLOCKED.
 Values read on earlier pages are in earlier_pages; use them.
 done_so_far lists every step already completed for this goal and the page it was
 taken on; check it before repeating a step or declaring the goal done.
+A loop_note means recent steps went round in a cycle; its targets are withdrawn, so take the
+step that confirms or moves on rather than another pick among the same ones.
 Opening an item's page does not act on it: an item is added, saved or changed only
 once that page's own button for it (Add to cart, Save, Update) has been clicked.
 DONE requires visible evidence that ALL requirements are satisfied.
@@ -149,6 +151,120 @@ def withdraw_stalled(heads: dict[str, list], history: list[dict]) -> dict[str, l
         if remaining:
             heads[name] = remaining
     return heads
+
+
+# ------------------------------------------------------------------ multi-target cycles
+#
+# Measured on a live flight calendar: the model clicked three day buttons round and round
+# (Oct 15, Oct 22, Oct 29, Oct 29, Oct 15, ...) for fifty steps until `max_steps`. Every click
+# was "ok" -- the chosen day's name gained ", departure date" -- so the no-change detector never
+# fired, and `stalled_targets` never saw three of one ref among eight steps. A cycle is a run of
+# steps on one page that uses only two to four targets and comes back to every one of them after
+# doing something else in between; order within a lap does not matter, and one target taken
+# twice running (its name changed in between) is still one visit.
+
+LOOP_WINDOW = 12        # same-page steps looked at: three laps of a four-target cycle
+LOOP_MAX_TARGETS = 4    # a cycle of one target is `stalled_targets`' business
+LOOP_MIN_TARGETS = 2
+
+
+def _history_operation(item: dict) -> str | None:
+    """The operation name a history item was offered under (SUBMIT is a `type` that sent)."""
+    if item.get("op") == "type" and item.get("submitted") is not None:
+        return "SUBMIT"
+    return ACT_TO_OPERATION.get(item.get("op") or "")
+
+
+def _same_page_run(history: list[dict], url: str) -> list[tuple[str, str]]:
+    """The (operation, ref) of this page's latest uninterrupted run of successful steps.
+
+    Items carry `page`, the path the goal loop stamped when the step was taken. The run stops at
+    the first step (going backwards) on another page or with no page at all: refs restart per
+    document, so e144 on the results page is not e144 in the calendar. Steps without a target
+    (WAIT, SCROLL) and failed steps are skipped, not boundaries.
+    """
+    here = model_url(url)
+    run: list[tuple[str, str]] = []
+    for item in reversed(history):
+        if len(run) >= LOOP_WINDOW:
+            break
+        if model_url(item.get("page") or "") != here or not item.get("page"):
+            break
+        name = _history_operation(item)
+        if item.get("ok") and item.get("ref") and name:
+            run.append((name, item["ref"]))
+    run.reverse()
+    return run
+
+
+def _cycles(run: list[tuple[str, str]], laps: int) -> set[tuple[str, str]]:
+    """Every target in a stretch of `run` that is a cycle gone round at least `laps` times.
+
+    A stretch qualifies when it uses between two and four targets and every one of them was
+    returned to, after something else, at least `laps - 1` times.
+    """
+    found: set[tuple[str, str]] = set()
+    for start in range(len(run)):
+        returns: dict[tuple[str, str], int] = {}
+        last_at: dict[tuple[str, str], int] = {}
+        for at in range(start, len(run)):
+            key = run[at]
+            if key in last_at and at - last_at[key] > 1 and any(
+                    run[k] != key for k in range(last_at[key] + 1, at)):
+                returns[key] = returns.get(key, 0) + 1
+            elif key not in last_at:
+                returns[key] = 0
+            last_at[key] = at
+            if len(returns) > LOOP_MAX_TARGETS:
+                break
+            if len(returns) >= LOOP_MIN_TARGETS and min(returns.values()) >= laps - 1:
+                found |= set(returns)
+    return found
+
+
+def loop_targets(history: list[dict], url: str) -> dict[str, set[str]]:
+    """Targets this page's recent steps have cycled through twice, by operation name."""
+    looped: dict[str, set[str]] = {}
+    for name, ref in _cycles(_same_page_run(history, url), laps=2):
+        looped.setdefault(name, set()).add(ref)
+    return looped
+
+
+def loop_exhausted(history: list[dict], url: str) -> bool:
+    """A cycle that went round a third time: withdrawing it did not break it, so the goal stops."""
+    return bool(_cycles(_same_page_run(history, url), laps=3))
+
+
+def withdraw_loop(heads: dict[str, list], history: list[dict], url: str) -> dict[str, set[str]]:
+    """Take every target of a cycle out of its operation's head; returns what was withdrawn.
+
+    Unlike `withdraw_stalled` this may empty a head. The cycle is the evidence that none of these
+    targets moves the goal on, and the alternative is the measured one: fifty more laps. What is
+    left -- other targets, other operations, WAIT, DONE, BLOCKED -- is still offered, and BLOCKED
+    after an honest cycle is a better answer than `max_steps` spent on it.
+    """
+    looped = loop_targets(history, url)
+    for name, refs in looped.items():
+        if name in heads:
+            heads[name] = [e for e in heads[name] if e.ref not in refs]
+            if not heads[name]:
+                del heads[name]
+    return looped
+
+
+def loop_note(looped: dict[str, set[str]], history: list[dict]) -> str:
+    """What the model is told about a withdrawn cycle, naming each target as last seen."""
+    names = {item.get("ref"): item.get("target") or "" for item in history if item.get("ref")}
+
+    def label(ref: str) -> str:
+        return f"{ref} {names[ref]!r}" if names.get(ref) else ref
+
+    parts = [f"{name} " + ", ".join(label(ref) for ref in sorted(refs))
+             for name, refs in sorted(looped.items())]
+    return ("Recent steps went round in a cycle on this page without finishing the goal: "
+            + "; ".join(parts) + ". Those targets are withdrawn. Take a different step "
+            "(the control that confirms or applies the choice, such as Done or Search), or "
+            "answer DONE if the goal is already met.")
 
 
 # Fields that answer typing with a suggestion list, and the role a suggestion has. A `listbox`
@@ -555,6 +671,8 @@ def choose(cfg: Config, observation: Observation, goal: str, history: list[dict]
     withdraw_valueless(heads, history, observation.url)
     withdraw_refused_submit(heads, history, observation.url)
     withdraw_resubmit(heads, history)
+    # Last, so the cycle's own targets are what goes: the rules above only ever narrow.
+    looped = withdraw_loop(heads, history, observation.url)
     operations = {name for name in operations if name in heads}
 
     questions: dict = {
@@ -608,8 +726,12 @@ def choose(cfg: Config, observation: Observation, goal: str, history: list[dict]
              **({"disabled": True} if element.disabled else {})}
             for element in observation.elements
         ],
-        "recent_actions": [{**item, "where": model_url(item["where"])} if item.get("where") else item
+        # `page` is the goal loop's own stamp for cycle detection; `where` says the same to the
+        # model where it matters, already cut down to a path.
+        "recent_actions": [{**{k: v for k, v in item.items() if k != "page"},
+                            **({"where": model_url(item["where"])} if item.get("where") else {})}
                            for item in history[-10:]],
+        **({"loop_note": loop_note(looped, history)} if looped else {}),
         # Pages this goal already visited, oldest first: what was read there (a reference
         # number, a price) is only visible here once the page has changed.
         **({"earlier_pages": [{**page, "url": model_url(page.get("url", "")),
@@ -641,6 +763,7 @@ def choose(cfg: Config, observation: Observation, goal: str, history: list[dict]
         "usage": (result.get("usage") or {}) if isinstance(result, dict) else {},
         "latency_ms": round((time.perf_counter() - started) * 1000),
         **({"overrode": overrode} if overrode else {}),
+        **({"loop": {name: sorted(refs) for name, refs in sorted(looped.items())}} if looped else {}),
     }
     if operation in {"DONE", "BLOCKED", "SCROLL", "WAIT"}:
         return decision
@@ -906,7 +1029,52 @@ def text_for(cfg: Config, goal: str, element, observation: Observation,
     if literal is not None:
         return _unless_held(element, literal)
     value = _text_from_helper(cfg, goal, element, observation, history)
+    if _is_date_field(element) and not _looks_like_date(value):
+        # Measured: the helper answered 'BKK' for the Departure date box. Typing an airport code
+        # into a date field is worse than typing nothing: the model then reads the field as set.
+        raise NoValueForField(
+            f"{getattr(element, 'name', '') or 'This field'!r} is a date field and the text "
+            f"helper's answer {value[:40]!r} is not a date; left it unchanged.")
     return _unless_held(element, value)
+
+
+_MONTHS = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
+_DAY_WORDS = ("today", "tomorrow", "tonight", "yesterday", "monday", "tuesday", "wednesday",
+              "thursday", "friday", "saturday", "sunday")
+# A name that says the field holds a date. The travel words ("Departure", "Return") only when
+# nothing in the name says it is a place instead: "Departure airport", "Return to city".
+_DATE_NAME = re.compile(r"\b(?:dates?|dob|birth|birthday|check[- ]?in|check[- ]?out)\b", re.I)
+_TRAVEL_NAME = re.compile(r"\b(?:departure|departing|depart|return|returning|arrival|arriving|"
+                          r"leaving|leave)\b", re.I)
+_PLACE_NAME = re.compile(r"\b(?:airport|city|from|to|where|location|station|place|origin|"
+                         r"destination|address|country|name|flight|number|code)\b", re.I)
+_NUMERIC_DATE = re.compile(r"\b\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\b|\b\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}\b")
+
+
+_MONTH_NAMES = ("january", "february", "march", "april", "may", "june", "july", "august",
+                "september", "october", "november", "december")
+
+
+def _has_month(text: str) -> bool:
+    """A month's name or its usual abbreviation (Oct, Sept) -- not merely a word starting "mar"."""
+    return any(word in _MONTHS or word == "sept" or word in _MONTH_NAMES for word in _words(text))
+
+
+def _looks_like_date(text: str) -> bool:
+    """A value that could be a date: a digit, a month's name, or a day word."""
+    words = _words(text)
+    return (any(ch.isdigit() for ch in text or "") or _has_month(text)
+            or any(word in _DAY_WORDS for word in words))
+
+
+def _is_date_field(element) -> bool:
+    """A field that plainly holds a date: named as one, or already showing one."""
+    name = getattr(element, "name", "") or getattr(element, "label", "") or ""
+    if _DATE_NAME.search(name) or (_TRAVEL_NAME.search(name) and not _PLACE_NAME.search(name)):
+        return True
+    current = getattr(element, "value", "") or ""
+    return bool(_NUMERIC_DATE.search(current)
+                or (_has_month(current) and any(ch.isdigit() for ch in current)))
 
 
 def _unless_held(element, value: str) -> str:
@@ -938,7 +1106,9 @@ def _text_from_helper(cfg: Config, goal: str, element, observation: Observation,
         "goal": goal,
         "field": {"name": element.name, "role": element.role, "current": element.value},
         "page": {"title": observation.title, "text": model_text(observation.text)[:6000]},
-        "recent_actions": history[-6:],
+        "recent_actions": [{**{k: v for k, v in item.items() if k != "page"},
+                            **({"where": model_url(item["where"])} if item.get("where") else {})}
+                           for item in history[-6:]],
     }
     result = _hedged_post(base + "/chat/completions", cfg.text_model_key, {
         "model": cfg.text_model,

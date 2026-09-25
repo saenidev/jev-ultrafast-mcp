@@ -107,8 +107,10 @@ def test_an_explicit_value_for_the_field_skips_the_helper(monkeypatch, goal, nam
     (TWO_FIELDS, "Where"),
 ])
 def test_anything_less_clear_still_asks_the_helper(monkeypatch, goal, name):
-    value, helper = _text(monkeypatch, goal, _field(name))
-    assert helper.calls == 1 and value == "FROM-HELPER"
+    # Date-shaped, so a date field ("Departure") takes it too: see tests/test_goal_loops.py.
+    answer = "FROM-HELPER 15 Oct"
+    value, helper = _text(monkeypatch, goal, _field(name), _Helper('{"text": "%s"}' % answer))
+    assert helper.calls == 1 and value == answer
 
 
 def test_an_unnamed_value_is_only_taken_where_there_is_one_field_to_take_it(monkeypatch):
