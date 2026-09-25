@@ -501,6 +501,7 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
         # the time the page that needed it came up.
         pages_seen: list[dict] = []
         weak_blocked_left = WEAK_BLOCKED_OVERRIDES  # see policy.WEAK_BLOCKED
+        submitted_value: dict[int, str] = {}  # this run's SUBMIT steps -> the value sent
         valueless_at: dict[int, str] = {}  # this run's no-value and refused-Enter steps -> page URL
         started = time.perf_counter()
         if url:
@@ -521,6 +522,9 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                         **({"error": step.error} if step.error else {}),
                         **({"where": valueless_at[id(step)]} if id(step) in valueless_at else {})}
                        for step in tab.history[run_start:][-10:]]
+            for item, step in zip(history, tab.history[run_start:][-10:]):
+                if id(step) in submitted_value:
+                    item["submitted"] = submitted_value[id(step)]
             try:
                 decision = policy.choose(CONFIG, observation, goal, history, pages_seen=pages_seen,
                                          second_chance=weak_blocked_left > 0)
@@ -629,6 +633,10 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
             if not step_result["ok"]:
                 status = f"failed:{error}"
                 break
+            if operation == "SUBMIT" and tab.history:
+                sent = observation.by_ref.get(decision["ref"])
+                if sent is not None:
+                    submitted_value[id(tab.history[-1])] = sent.value
             left = observation
             observation = tab.last or tab.observe()
             _note_page_left(pages_seen, left, observation)

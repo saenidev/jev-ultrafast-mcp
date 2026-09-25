@@ -447,3 +447,37 @@ def test_the_goal_loop_bounds_the_overrides(monkeypatch):
     assert chances[WEAK_BLOCKED_OVERRIDES] is False, chances
     assert out.count("taking the action") == WEAK_BLOCKED_OVERRIDES, out
     assert "status: blocked" in out, out
+
+
+def test_the_same_query_is_not_offered_for_submit_again():
+    """After a search the results page still shows the query; sending it again changes nothing."""
+    box = Element(ref="e3", role="textbox", name="Search products", editable=True, value="Blue Kettle")
+    history = [{"op": "type", "ref": "e7", "target": "Search products", "ok": True,
+                "submitted": "Blue Kettle"}]
+    heads = policy.withdraw_resubmit({"SUBMIT": [box], "CLICK": [box]}, history)
+    assert "SUBMIT" not in heads, "the query this goal already sent must not be offered again"
+    assert heads["CLICK"] == [box], "only SUBMIT is withdrawn"
+
+
+def test_a_changed_query_or_another_field_is_still_offered():
+    history = [{"op": "type", "ref": "e7", "target": "Search products", "ok": True,
+                "submitted": "Blue Kettle"}]
+    changed = Element(ref="e3", role="textbox", name="Search products", editable=True, value="Oak Board")
+    other = Element(ref="e4", role="textbox", name="Postcode", editable=True, value="Blue Kettle")
+    heads = policy.withdraw_resubmit({"SUBMIT": [changed, other]}, history)
+    assert heads["SUBMIT"] == [changed, other]
+    failed = [{**history[0], "ok": False}]
+    same = Element(ref="e3", role="textbox", name="Search products", editable=True, value="Blue Kettle")
+    assert policy.withdraw_resubmit({"SUBMIT": [same]}, failed)["SUBMIT"] == [same], (
+        "a submit that did not go through may be retried")
+
+
+def test_the_goal_loop_records_what_each_submit_sent(monkeypatch):
+    search = Element(ref="e1", role="searchbox", name="Search", editable=True, value="browser-use")
+    tab = _Tab(_observation([search]))
+    decisions = [
+        {"operation": "SUBMIT", "ref": "e1", "target": "Search", "confidence": 0.9},
+        {"operation": "DONE", "ref": None, "confidence": 0.9},
+    ]
+    _out, seen = _drive(monkeypatch, tab, decisions, lambda *_a: "x")
+    assert seen[1][-1].get("submitted") == "browser-use", seen[1]

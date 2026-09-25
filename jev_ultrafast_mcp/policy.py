@@ -171,6 +171,24 @@ def withdraw_valueless(heads: dict[str, list], history: list[dict], url: str) ->
     return heads
 
 
+def withdraw_resubmit(heads: dict[str, list], history: list[dict]) -> dict[str, list]:
+    """Stop offering SUBMIT on a field whose current value this goal already sent.
+
+    After a search the results page shows the box still holding the query, so SUBMIT stays on
+    offer, and sending the same query again changes nothing. Measured: the model weighed
+    "submit again" against clicking the result, and a near-tie then spent the goal re-submitting.
+    Keyed on the field's name and the value sent, which survive the reload that renumbers refs;
+    a changed query is a new submission and is offered again.
+    """
+    sent = {(item.get("target") or "", item.get("submitted")) for item in history
+            if item.get("ok") and item.get("submitted") is not None}
+    if sent and heads.get("SUBMIT"):
+        heads["SUBMIT"] = [e for e in heads["SUBMIT"] if (e.name, e.value) not in sent]
+        if not heads["SUBMIT"]:
+            del heads["SUBMIT"]
+    return heads
+
+
 def withdraw_refused_submit(heads: dict[str, list], history: list[dict], url: str) -> dict[str, list]:
     """Stop offering SUBMIT on a field whose Enter was refused on this page in this run.
 
@@ -418,6 +436,7 @@ def choose(cfg: Config, observation: Observation, goal: str, history: list[dict]
     withdraw_stalled(heads, history)
     withdraw_valueless(heads, history, observation.url)
     withdraw_refused_submit(heads, history, observation.url)
+    withdraw_resubmit(heads, history)
     operations = {name for name in operations if name in heads}
 
     questions: dict = {
