@@ -16,6 +16,7 @@ import concurrent.futures
 import json
 import math
 import os
+import re
 import time
 
 import httpx
@@ -374,7 +375,19 @@ SECONDARY_ROLES = frozenset({
 })
 
 
-def reachable_first(candidates: list, limit: int = 120) -> list:
+_STOP_WORDS = frozenset("""the and then from this that with into open article page click find
+choose select for its your you are was have has not all any but can out get set use via onto over
+under after before about than when where which what who how them they their there here should must
+""".split())
+
+
+def goal_terms(goal: str) -> tuple[str, ...]:
+    """Distinctive words of a goal, for the observer to keep matching controls within the cap."""
+    words = re.findall(r"[^\W_]{3,}", goal.lower())
+    return tuple(dict.fromkeys(w for w in words if w not in _STOP_WORDS))[:24]
+
+
+def reachable_first(candidates: list, limit: int = 120, prefer: tuple[str, ...] = ()) -> list:
     """The candidates to put to the model: the most usable ones, in document order.
 
     Cutting at `limit` in document order drops exactly what the page just added.
@@ -395,7 +408,13 @@ def reachable_first(candidates: list, limit: int = 120) -> list:
     """
     if len(candidates) <= limit:
         return candidates
-    usable = sorted(candidates, key=_reachability)
+    # Goal words first, as in the observer's own cap: measured on Mount Everest, the observer kept
+    # the "Tenzing Norgay" link and this cut then dropped it again among 200+ off-screen links, so
+    # the model clicked "Sherpa" (the best on-screen stand-in) three runs of three.
+    def key(element):
+        name = (element.name or "").lower()
+        return (-min(3, sum(word in name for word in prefer)),) + _reachability(element)
+    usable = sorted(candidates, key=key)
     kept = {id(element) for element in usable[:limit]}
     return [element for element in candidates if id(element) in kept]
 
@@ -444,6 +463,7 @@ def choose(cfg: Config, observation: Observation, goal: str, history: list[dict]
             "TYPESAFE_BASE_URL=https://openrouter.ai/api/alpha/decisions)."
         )
 
+    terms = goal_terms(goal)
     operations, heads = _operation_heads(observation)
     if not operations:
         return {"operation": "BLOCKED", "ref": None, "confidence": 1.0, "usage": {}}
@@ -490,7 +510,7 @@ def choose(cfg: Config, observation: Observation, goal: str, history: list[dict]
                     "current_value": element.value or element.current or element.checked,
                     **({"context": element.context} if element.context else {}),
                 }
-                for element in reachable_first(candidates)
+                for element in reachable_first(candidates, prefer=terms)
             },
         }
 

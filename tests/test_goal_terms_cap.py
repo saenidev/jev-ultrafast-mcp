@@ -16,7 +16,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from jev_ultrafast_mcp import server  # noqa: E402
+from jev_ultrafast_mcp import policy  # noqa: E402
 from jev_ultrafast_mcp.browser import BrowserManager  # noqa: E402
 from jev_ultrafast_mcp.config import Config, find_chrome  # noqa: E402
 
@@ -37,7 +37,7 @@ PAGE = ("<!doctype html><title>article</title><form><label>Search <input name=q>
 
 
 def test_goal_terms_drop_filler_and_keep_names():
-    terms = server._goal_terms("Open the Tenzing Norgay article from this page, then open Edmund Hillary.")
+    terms = policy.goal_terms("Open the Tenzing Norgay article from this page, then open Edmund Hillary.")
     assert terms == ("tenzing", "norgay", "edmund", "hillary")
 
 
@@ -50,7 +50,7 @@ def test_a_named_control_survives_the_cap_only_while_a_goal_names_it():
         assert plain.omitted > 0
         assert not any(e.name == "Tenzing Norgay" for e in plain.elements)
 
-        session.goal_terms = server._goal_terms("Open the Tenzing Norgay article")
+        session.goal_terms = policy.goal_terms("Open the Tenzing Norgay article")
         steered = session.observe()
         assert any(e.name == "Tenzing Norgay" for e in steered.elements)
         # The form is still there: goal words add a control, they do not displace the primary ones.
@@ -60,3 +60,16 @@ def test_a_named_control_survives_the_cap_only_while_a_goal_names_it():
         assert not any(e.name == "Tenzing Norgay" for e in session.observe().elements)
     finally:
         manager.shutdown()
+
+
+def test_the_decision_question_keeps_goal_named_links_inside_its_own_cut():
+    """The second cut: `reachable_first` put 120 of the observer's 250 to the model and dropped the
+    goal-named link again among the off-screen ones."""
+    from jev_ultrafast_mcp.observe import Element
+    links = [Element(ref=f"e{i}", role="link", name=f"Summit route {i}", in_viewport=i < 40) for i in range(200)]
+    named = Element(ref="e999", role="link", name="Tenzing Norgay", in_viewport=False)
+    pool = links[:150] + [named] + links[150:]
+    assert named not in policy.reachable_first(pool)
+    kept = policy.reachable_first(pool, prefer=policy.goal_terms("Open the Tenzing Norgay article"))
+    assert named in kept and len(kept) == 120
+    assert kept == [e for e in pool if e in kept], "document order is kept"

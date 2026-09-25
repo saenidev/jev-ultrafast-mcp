@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import atexit
 import json
-import re
 import time
 
 from mcp.server import MCPServer
@@ -127,18 +126,6 @@ def _done_line(step, acted_on: tuple[str, str] | None) -> str:
     title, name = acted_on or ("", "")
     line = f"{step.op} {name or step.target or step.ref or ''}".strip()
     return line + (f" (on: {title[:80]})" if title else "")
-
-
-_STOP_WORDS = frozenset("""the and then from this that with into open article page click find
-choose select for its your you are was have has not all any but can out get set use via onto over
-under after before about than when where which what who how them they their there here should must
-""".split())
-
-
-def _goal_terms(goal: str) -> tuple[str, ...]:
-    """Distinctive words of a goal, for the observer to keep matching controls within the cap."""
-    words = re.findall(r"[^\W_]{3,}", goal.lower())
-    return tuple(dict.fromkeys(w for w in words if w not in _STOP_WORDS))[:24]
 
 
 def _first_read(tab) -> Observation:
@@ -513,7 +500,7 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
         # The stall count belongs to a run, not to the session: a goal that
         # inherited the previous goal's count would call itself stuck on step 1.
         tab.reset_progress()
-        tab.goal_terms = _goal_terms(goal)
+        tab.goal_terms = policy.goal_terms(goal)
         # This goal's own steps start here. The model is told not to repeat satisfied steps, so
         # showing it the previous goal's "Add to cart" made it report a new "add this too" goal
         # DONE the moment it reached the product page. What earlier goals did is on the page.
