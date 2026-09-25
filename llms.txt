@@ -34,9 +34,11 @@ Cline, Windsurf, Gemini CLI). MIT licensed. Requires Python ≥ 3.10 and any Chr
   the goal, and a decision model opens the page and drives the loop server-side, so the caller spends
   one turn rather than one per action. Reports what it cost
   (`turbo: N decisions · N tokens · Ns model + Ns page · Ns wall`).
-- `browser_task(task, url, session, max_subgoals, max_steps_per_subgoal, verbose)` — a multi-step
-  task: a planner model (Anthropic Messages API, `PLANNER_*`) splits it into short checked subgoals and
-  the decision model runs each through `browser_goal`; the confirmation rail still applies. Use
+- `browser_task(task, url, session, max_subgoals, max_steps_per_subgoal, verbose, plan)` — a
+  multi-step task: a planner model (Anthropic Messages API, `PLANNER_*`) plans it once as a few checked
+  subgoals and replans only on failure; the decision model runs each through `browser_goal`, ending
+  the moment its checks pass. Pass `plan` (your own subgoals) to skip the planner; a `pick` subgoal
+  clicks the min/max-numbered element with no model call. The confirmation rail still applies. Use
   `browser_goal` for one short intent on one page.
 - `browser_open(url, session, hint)` — open a URL in a background tab it owns, return the element table
 - `browser_observe(session, mode, include_text, include_json)` — re-read the page; `mode=auto` emits a delta

@@ -490,7 +490,7 @@ e12  btn    Delete account
 | `browser_assert` | 对页面做确定性断言，不靠模型判断 |
 | `browser_macro` | 录一次流程，之后回放，零模型调用 |
 | `browser_goal` | 把整个任务交出去：由决策模型驱动页面 |
-| `browser_task` | 多步任务：规划模型拆成带断言的子目标，决策模型逐个执行 |
+| `browser_task` | 多步任务：规划一次（或传入自己的 `plan`），决策模型逐个执行带断言的子目标 |
 | `browser_tabs` | 列出、新建、切换、关闭标签页 |
 | `browser_sessions` | 列出当前存活的浏览器会话 |
 | `browser_close` | 收尾一个会话 |
@@ -583,13 +583,21 @@ decisions 路由）。给了 `verify` 检查时返回 `verified: PASS/FAIL`。
 这是「最后一个动作把被操作对象本身消灭掉」这类目标的常态 —— 点完签到按钮，按钮就没了，模型
 找不到还能操作的东西，于是一个其实已经成功的目标被它报成 `BLOCKED`。
 
-### `browser_task(task, url="", session="default", max_subgoals=12, max_steps_per_subgoal=15, verbose=False)`
+### `browser_task(task, url="", session="default", max_subgoals=12, max_steps_per_subgoal=15, verbose=False, plan=None)`
 给多阶段、多页面的任务用。规划模型（Anthropic Messages API：`PLANNER_MODEL`，默认 `claude-opus-5-5`，
-`PLANNER_EFFORT=low`）读任务和页面，写出简短、字面化的子目标，每个都带确定性断言。每一步仍由决策模型来走：
-子目标通过 `browser_goal` 执行，断言由代码检查；只有失败、换了页面、或每四个子目标之后才再问规划模型。
-连续三个子目标失败就停下。规划模型只输出文字（目标和白名单内的断言，没有 `js`），所以付款/删除/下单
-仍会被确认护栏拦下，任务以 `blocked` 结束。它读到的是和决策模型相同的、已脱敏的元素表和文本。
-返回每个子目标的成败、答案和耗时拆分。单页上的一个简短意图，`browser_goal` 更快。
+`PLANNER_EFFORT=low`）**只读一次**任务和页面，把整个任务写成少量字面化的子目标（每个覆盖一块表单或一屏），
+每个都带确定性断言。子目标通过 `browser_goal` 执行，断言作为 `until` 传入，一旦通过立即结束（不再花一次
+DONE 请求）；执行前就已成立的断言会被丢弃。只有子目标失败、或计划跑完仍需读取答案时才再问规划模型。
+连续三个子目标失败就停下；决策请求出错会重试一次。没有规划模型的 key、或第一次规划就失败时，整个任务
+交给一次 `browser_goal`（报告 “planner unavailable, ran Jev alone”）。
+
+- **`plan`**：已经知道步骤时直接传入子目标列表（`goal`、`checks`、`max_steps`），不调用规划模型，除非某步失败。
+  表单字段用 `field_shows` 断言（按字段名开头找字段，匹配其值或名称的其余部分）。
+- **`pick`**：「最便宜 / 最高」不交给模型：`{"role", "name_regex", "key": "min_number"|"max_number",
+  "number_regex"}`，由代码点击数字最小/最大的元素，照常经过确认护栏。先让列表完整显示。指向付款/删除/移除的 pick 会被拒绝。
+
+规划模型只输出文字，所以付款/删除/下单仍会被确认护栏拦下，任务以 `blocked` 结束。报告里有规划调用次数、
+决策次数、pick 次数、until 命中、丢弃的断言和总耗时。单页上的一个简短意图，`browser_goal` 更快。
 
 ### `browser_tabs` · `browser_sessions` · `browser_close` · `browser_doctor`
 标签页管理（列 / 新建 / 切换 / 关闭）、会话列举、收尾，以及自检 —— 报告找到的是哪个浏览器、

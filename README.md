@@ -538,7 +538,7 @@ Eleven tools. Most sessions need four of them.
 | `browser_assert` | Deterministic checks on the page, with no model judgement |
 | `browser_macro` | Record a flow once, then replay it with zero model calls |
 | `browser_goal` | Hand the whole task over: the decision model drives the page |
-| `browser_task` | A multi-step task: a planner splits it into checked subgoals, the decision model runs each |
+| `browser_task` | A multi-step task: planned once as checked subgoals (or your own `plan`), the decision model runs each |
 | `browser_tabs` | List, open, switch and close tabs |
 | `browser_sessions` | List the live browser sessions |
 | `browser_close` | Tear a session down |
@@ -645,17 +645,35 @@ records that it overruled. This is the ordinary shape of a goal whose last actio
 acted on — click a check-in button and the button is gone, so the model, finding nothing left to do,
 reports `BLOCKED` on a goal that in fact succeeded.
 
-### `browser_task(task, url="", session="default", max_subgoals=12, max_steps_per_subgoal=15, verbose=False)`
+### `browser_task(task, url="", session="default", max_subgoals=12, max_steps_per_subgoal=15, verbose=False, plan=None)`
 For tasks with several stages or pages. A planner model (the Anthropic Messages API: `PLANNER_MODEL`,
-default `claude-opus-5-5` at `PLANNER_EFFORT=low`) reads the task and the page and writes short,
-literal subgoals, each with deterministic checks. The decision model still makes every move: each
-subgoal runs through `browser_goal`, code runs its checks, and the planner is asked again only after a
-failure, a new page, or every four subgoals. Three failed subgoals in a row stop the task. The planner
-only writes text -- goals and a whitelist of checks (no `js`) -- so a pay/delete/order step still stops
-at the confirmation rail and the task ends `blocked`. It reads the same masked table and text the
-decision model does. Reports each subgoal's pass/fail, the answer, and the time split
-(`timing: planner 2 calls 7.9s · jev 9 decisions 3.4s · page 2.1s · 14.6s wall`). For one short intent
-on one page, `browser_goal` is faster.
+default `claude-opus-5-5` at `PLANNER_EFFORT=low`) reads the task and the page **once** and writes the
+whole task as a few literal subgoals -- one per form area or screen -- each with deterministic checks.
+The decision model still makes every move: each subgoal runs through `browser_goal`, its checks go
+along as `until` so it ends the moment they pass (no DONE request), and checks that already held
+before it ran are dropped. The planner is asked again only when a subgoal fails, or when the plan ran
+out and the answer is still to be read. Three failed subgoals in a row stop the task; a decision
+request that errors is retried once. No planner key, or a planner that fails on its first call: the
+task runs as one `browser_goal` ("planner unavailable, ran Jev alone").
+
+- **`plan`** -- when you already know the steps, pass them; the planner is not called unless one
+  fails. `[{"goal": "Where from?: type \"JFK\", then click the suggestion \"John F. Kennedy
+  International Airport (JFK)\"", "checks": [{"type": "field_shows", "name": "Where from?", "value":
+  "JFK"}], "max_steps": 6}, ...]`. Checks: `field_shows` (a field by the start of its name; matches
+  its value *or* the rest of its name, since a combobox shows `Where from? New York JFK`),
+  `text_contains`, `text_absent`, `url_contains`, `title_matches`, `element_exists`, `element_gone`.
+- **`pick`** -- "the cheapest / the highest" without a model: `{"goal": "Pick the cheapest flight",
+  "pick": {"role": "link", "name_regex": "^From [0-9,]+ US dollars", "key": "min_number",
+  "number_regex": "From ([0-9,]+)"}}` clicks the matching element with the lowest number through the
+  ordinary click rail. Show the whole list first. A pick at a pay/delete/remove control is refused.
+
+The planner only writes text -- goals, a whitelist of checks (no `js`) and pick specs -- so a
+pay/delete/order step still stops at the confirmation rail and the task ends `blocked`; a subgoal
+that clicks Remove/Delete when the task never asked is refused when the plan is read. It reads the
+same masked table and text the decision model does. Reports each subgoal's pass/fail, the answer, and
+the cost (`timing: planner 1 call 6.1s · jev 14 decisions 5.2s · page 3.0s · 21.4s wall`, then
+`plan: planner · 0 replans · 1 picks · 3 until-hits · 1 dropped checks`). For one short intent on
+one page, `browser_goal` is faster.
 
 ### `browser_tabs` · `browser_sessions` · `browser_close` · `browser_doctor`
 Tab management (list / new / switch / close), session listing, teardown, and a self-check that

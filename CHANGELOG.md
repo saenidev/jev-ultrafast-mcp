@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased (lean planning)
+
+- `browser_task` plans once and replans only on failure: no periodic reviews, no replan on a URL
+  change. Subgoals cover a whole form area or screen; their checks go to `browser_goal` as `until`
+  (when it has it), and checks that already held before a subgoal are dropped and reported.
+- `plan=[...]`: a host that knows the steps runs them with zero planner calls.
+- `pick` subgoals (`role`, `name_regex`, `min_number`/`max_number`, `number_regex`) click through
+  `server.run_click_best` with no model call; picks and subgoals that click Remove/Delete/pay when the
+  task never asked are refused when the plan is read.
+- New `field_shows` check: a field by the start of its name, matched against its value or the rest of
+  its name (`Where from? New York JFK`). The planner's `value_named` reads the name too.
+- Fallbacks: no planner, or a planner that fails first, runs the task as one Jev goal; a Jev request
+  error retries its subgoal once. The report adds planner calls, picks, until-hits, dropped checks.
+
 ## Unreleased (general-browser-use, part 3)
 
 - Enter/Space rail closes the second review's gaps: the field's form *and* dialog, through shadow
