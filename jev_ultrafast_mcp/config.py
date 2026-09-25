@@ -269,6 +269,17 @@ DEFAULT_DENY_PATTERNS = [
     r"\bunsubscribe\b", r"\b(close|delete)\s+permanently\b",
     r"\bconfirm\s+(and\s+)?(pay|payment|order|purchase|transfer|booking)\b",
     r"\bsend\s+(money|payment)\b", r"\bwithdraw\b", r"\btransfer\s+funds\b",
+    # Removal. A bare "Remove" is usually a whole item, row, flight or saved card going away, and
+    # a goal that names the item ("the flight from Bangkok to Seoul") makes its Remove button look
+    # like the item itself: measured, the decision model clicked "Remove flight from Bangkok to
+    # Seoul on Sun, Oct 11" when asked to set that flight's date. Exempt only the passenger/guest
+    # count steppers ("Remove adult", "Remove infant on lap"): they are the "-" of a counter whose
+    # "+" sits beside them, undone in one click, and blocking them would make every passenger
+    # count unreachable to a goal.
+    r"\bremove\b(?!\s+(an?\s+|one\s+)?(adult|child|infant|senior|youth|teen|student|guest|traveller"
+    r"|traveler|passenger)s?(\s+(in\s+seat|on\s+lap))?\s*$)",
+    r"\bdiscard\b", r"\bclear\s+all\b", r"\berase\b", r"\bempty\s+(the\s+|your\s+)?(cart|basket|bag|trash|bin)\b",
+    r"\bmove\s+to\s+(the\s+)?(trash|bin)\b",
 ]
 
 DEFAULT_SECRET_PATTERNS = [
