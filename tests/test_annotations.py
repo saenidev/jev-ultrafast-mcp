@@ -19,6 +19,7 @@ WRITES = {
     "browser_open",
     "browser_act",
     "browser_goal",
+    "browser_task",
     "browser_macro",
     "browser_tabs",
     "browser_close",
@@ -68,7 +69,7 @@ def test_open_world_marks_what_leaves_the_page_you_are_on():
     URL was refused through `browser_act` and accepted through this tool.
     """
     tools = _tools()
-    for name in ("browser_open", "browser_act", "browser_goal", "browser_macro",
+    for name in ("browser_open", "browser_act", "browser_goal", "browser_task", "browser_macro",
                  "browser_tabs"):
         assert tools[name].annotations.open_world_hint is True, name
     for name in ("browser_observe", "browser_assert", "browser_sessions",

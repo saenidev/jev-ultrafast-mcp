@@ -86,6 +86,9 @@ OPENROUTER_ENDPOINT = "https://openrouter.ai/api/alpha/decisions"
 DEFAULT_PROVIDER = "typesafe"
 DEFAULT_TEXT_BASE = "https://api.deepseek.com/v1"
 DEFAULT_TEXT_MODEL = "deepseek-chat"
+DEFAULT_PLANNER_BASE = "https://api.anthropic.com"
+DEFAULT_PLANNER_MODEL = "claude-opus-5-5"
+DEFAULT_PLANNER_EFFORT = "low"   # sent as output_config.effort; "" sends none
 
 # Jev is reachable through more than one API, and both are first-class here rather than one
 # being the default and the other being a variable named after its competitor. Every route
@@ -206,6 +209,11 @@ def model_env_vars() -> tuple[str, ...]:
         "TEXT_MODEL_BASE_URL",
         "TEXT_MODEL",
         "TEXT_MODEL_REASONING",
+        "PLANNER_BASE_URL",     # browser_task's planner (Anthropic Messages API)
+        "PLANNER_API_KEY",
+        "ANTHROPIC_API_KEY",    # the planner's key when PLANNER_API_KEY is unset
+        "PLANNER_MODEL",
+        "PLANNER_EFFORT",
     }))
 
 
@@ -330,6 +338,12 @@ class Config:
     text_model_key: str | None = None
     text_model_base: str = DEFAULT_TEXT_BASE
     text_model: str | None = DEFAULT_TEXT_MODEL
+    # browser_task's planner: a large model on the Anthropic Messages API that splits a task into
+    # checked subgoals for Jev. It never acts itself. Key: PLANNER_API_KEY, else ANTHROPIC_API_KEY.
+    planner_base_url: str = DEFAULT_PLANNER_BASE
+    planner_key: str | None = None
+    planner_model: str = DEFAULT_PLANNER_MODEL
+    planner_effort: str = DEFAULT_PLANNER_EFFORT
     nav_timeout: float = 20.0
     call_timeout: float = 30.0
     settle_timeout: float = 4.0            # max wait for a client-rendered page to show elements
@@ -377,6 +391,10 @@ class Config:
             text_model_key=text_key,
             text_model_base=text_base,
             text_model=text_model,
+            planner_base_url=_env("PLANNER_BASE_URL") or DEFAULT_PLANNER_BASE,
+            planner_key=_env("PLANNER_API_KEY") or _env("ANTHROPIC_API_KEY") or None,
+            planner_model=_env("PLANNER_MODEL") or DEFAULT_PLANNER_MODEL,
+            planner_effort=_env("PLANNER_EFFORT") or DEFAULT_PLANNER_EFFORT,
             settle_timeout=float(os.environ.get("JEVMCP_SETTLE_TIMEOUT", "4.0")),
             settle_poll_ms=int(os.environ.get("JEVMCP_SETTLE_POLL_MS", "120")),
         )

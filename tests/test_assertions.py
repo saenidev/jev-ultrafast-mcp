@@ -24,7 +24,8 @@ from jev_ultrafast_mcp.observe import Element, Observation
 # shipping an untested check.
 EXERCISED = frozenset({
     "url_matches", "url_contains", "title_matches", "text_contains", "text_absent",
-    "element_exists", "element_gone", "value_equals", "checked", "count_at_least", "js",
+    "element_exists", "element_gone", "value_equals", "value_named", "checked", "count_at_least",
+    "js",
 })
 
 ELEMENTS = [
@@ -210,3 +211,47 @@ def test_a_string_state_is_read_as_a_bool(raw, expected):
 
 def test_the_state_key_wins_when_both_are_given():
     assert passed({"type": "checked", "ref": "e3", "state": True, "checked": False})
+
+
+# ------------------------------------------------------------------ value_named
+
+NAMED = [
+    Element(ref="e1", role="combobox", name="Where from?", value="John F. Kennedy International (JFK)"),
+    Element(ref="e2", role="textbox", name="City", value="Zurich"),
+    Element(ref="e3", role="textbox", name="Password", value="hunter2", secret=True),
+    Element(ref="e4", role="combobox", name="Sort by", current="Price (lowest)"),
+]
+
+
+def test_value_named_finds_the_field_by_name_and_matches_a_substring():
+    assert passed({"type": "value_named", "name": "Where from", "value": "jfk"}, elements=NAMED)
+    assert passed({"type": "value_named", "name": "Sort by", "value": "Price"}, elements=NAMED)
+    assert not passed({"type": "value_named", "name": "Where from", "value": "LHR"}, elements=NAMED)
+
+
+def test_value_named_can_require_equality_and_a_role():
+    assert passed({"type": "value_named", "name": "City", "value": "zurich", "contains": False},
+                  elements=NAMED)
+    assert not passed({"type": "value_named", "name": "City", "value": "Zur", "contains": "false"},
+                      elements=NAMED)
+    assert not passed({"type": "value_named", "role": "combobox", "name": "City", "value": "Zurich"},
+                      elements=NAMED)
+
+
+def test_value_named_says_which_field_is_missing():
+    result = one({"type": "value_named", "name": "Where to", "value": "LHR"}, elements=NAMED)
+    assert not result["ok"] and "no field" in result["detail"]
+
+
+def test_value_named_never_reads_a_secret_field_back():
+    result = one({"type": "value_named", "name": "Password", "value": "hunter2"}, elements=NAMED)
+    assert not result["ok"] and "hunter2" not in result["detail"]
+
+
+@pytest.mark.parametrize("check", [
+    {"type": "value_named", "name": "City"},
+    {"type": "value_named", "value": "Zurich"},
+    {"type": "value_named", "name": "", "value": "Zurich"},
+])
+def test_value_named_without_a_name_or_value_fails(check):
+    assert not passed(check, elements=NAMED)

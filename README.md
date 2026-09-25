@@ -71,7 +71,7 @@ python3 -m venv ~/.jev-ultrafast-mcp/venv
 ```
 
 That gives you a `jev-ultrafast-mcp` console script and a stable interpreter path to put in a
-client config — verified against the latest `mcp` SDK on Python 3.13, every one of the ten tools
+client config — verified against the latest `mcp` SDK on Python 3.13, every one of the eleven tools
 listed.
 
 `scripts/install.py` is the other half: it finds your MCP clients and writes the config each one
@@ -520,7 +520,7 @@ the model re-reads only the part of the page that moved.
 
 ## Tools
 
-Ten tools. Most sessions need four of them.
+Eleven tools. Most sessions need four of them.
 
 | Tool | Description |
 |---|---|
@@ -530,6 +530,7 @@ Ten tools. Most sessions need four of them.
 | `browser_assert` | Deterministic checks on the page, with no model judgement |
 | `browser_macro` | Record a flow once, then replay it with zero model calls |
 | `browser_goal` | Hand the whole task over: the decision model drives the page |
+| `browser_task` | A multi-step task: a planner splits it into checked subgoals, the decision model runs each |
 | `browser_tabs` | List, open, switch and close tabs |
 | `browser_sessions` | List the live browser sessions |
 | `browser_close` | Tear a session down |
@@ -636,6 +637,18 @@ records that it overruled. This is the ordinary shape of a goal whose last actio
 acted on — click a check-in button and the button is gone, so the model, finding nothing left to do,
 reports `BLOCKED` on a goal that in fact succeeded.
 
+### `browser_task(task, url="", session="default", max_subgoals=12, max_steps_per_subgoal=15, verbose=False)`
+For tasks with several stages or pages. A planner model (the Anthropic Messages API: `PLANNER_MODEL`,
+default `claude-opus-5-5` at `PLANNER_EFFORT=low`) reads the task and the page and writes short,
+literal subgoals, each with deterministic checks. The decision model still makes every move: each
+subgoal runs through `browser_goal`, code runs its checks, and the planner is asked again only after a
+failure, a new page, or every four subgoals. Three failed subgoals in a row stop the task. The planner
+only writes text -- goals and a whitelist of checks (no `js`) -- so a pay/delete/order step still stops
+at the confirmation rail and the task ends `blocked`. It reads the same masked table and text the
+decision model does. Reports each subgoal's pass/fail, the answer, and the time split
+(`timing: planner 2 calls 7.9s · jev 9 decisions 3.4s · page 2.1s · 14.6s wall`). For one short intent
+on one page, `browser_goal` is faster.
+
 ### `browser_tabs` · `browser_sessions` · `browser_close` · `browser_doctor`
 Tab management (list / new / switch / close), session listing, teardown, and a self-check that
 reports which browser was found and whether it is reachable.
@@ -674,6 +687,10 @@ All optional; the defaults are the point.
 | No | `TYPESAFE_MODEL` | `jev-latest` | decision-model slug |
 | No | `TEXT_MODEL_API_KEY` | — | optional; only for the small text helper `browser_goal` uses to type a value into a field. Unset, the helper inherits the decision model's provider |
 | No | `TEXT_MODEL_BASE_URL` | `https://api.deepseek.com/v1` | endpoint for that helper; setting it *or* `TEXT_MODEL_API_KEY` is what opts out of inheriting the decision model's provider |
+| No | `PLANNER_API_KEY` | `ANTHROPIC_API_KEY` | key for `browser_task`'s planner (Anthropic Messages API) |
+| No | `PLANNER_BASE_URL` | `https://api.anthropic.com` | the planner's endpoint, e.g. a local proxy |
+| No | `PLANNER_MODEL` | `claude-opus-5-5` | the planner's model |
+| No | `PLANNER_EFFORT` | `low` | sent as `output_config.effort`; empty sends none |
 | No | `TEXT_MODEL` | `deepseek-chat` | model for that helper; required when the helper inherits a provider, since `deepseek-chat` is not an OpenRouter slug |
 
 `JEVMCP_MODE=attach` is the "use the browser I already have open" route — the one to take when the
@@ -684,7 +701,8 @@ only ever touches the tab it opens: `browser_close` detaches rather than quittin
 when the server exits. Your other windows, and the session in them, are never closed.
 
 Everything above the last eight rows is local: it configures a browser on your machine. Only the
-decision-model group talks to the network, and only when `browser_goal` actually runs.
+decision-model group talks to the network, and only when `browser_goal` actually runs (the planner
+rows: only when `browser_task` runs).
 
 The decision model has two routes and `JEV_PROVIDER` names which one you are on. `typesafe` is Jev's
 own API. `openrouter` is the same model through OpenRouter's decisions route, needs no TypeSafe

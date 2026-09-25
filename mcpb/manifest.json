@@ -67,6 +67,10 @@
       "description": "Hand the whole task over: a decision model drives the page to the end server-side, and code checks the result."
     },
     {
+      "name": "browser_task",
+      "description": "A multi-step task: a planner model splits it into checked subgoals, and the decision model runs each one."
+    },
+    {
       "name": "browser_tabs",
       "description": "List, open, switch and close tabs."
     },

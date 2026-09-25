@@ -65,7 +65,7 @@ python3 -m venv ~/.jev-ultrafast-mcp/venv
 ```
 
 这会给你一个 `jev-ultrafast-mcp` 命令，以及一个可以填进客户端配置的稳定解释器路径 —— 已在
-Python 3.13 + 最新 `mcp` SDK 上实测：十个工具全部正常列出。
+Python 3.13 + 最新 `mcp` SDK 上实测：十一个工具全部正常列出。
 
 `scripts/install.py` 是另一半：它会找到你机器上的 MCP 客户端，按各自期望的格式写入配置，
 **合并**进现有文件，并且先存一份 `.bak`。
@@ -480,7 +480,7 @@ e12  btn    Delete account
 
 ## 工具
 
-一共十个，多数会话只会用到其中四个。
+一共十一个，多数会话只会用到其中四个。
 
 | 工具 | 说明 |
 |---|---|
@@ -490,6 +490,7 @@ e12  btn    Delete account
 | `browser_assert` | 对页面做确定性断言，不靠模型判断 |
 | `browser_macro` | 录一次流程，之后回放，零模型调用 |
 | `browser_goal` | 把整个任务交出去：由决策模型驱动页面 |
+| `browser_task` | 多步任务：规划模型拆成带断言的子目标，决策模型逐个执行 |
 | `browser_tabs` | 列出、新建、切换、关闭标签页 |
 | `browser_sessions` | 列出当前存活的浏览器会话 |
 | `browser_close` | 收尾一个会话 |
@@ -582,6 +583,14 @@ decisions 路由）。给了 `verify` 检查时返回 `verified: PASS/FAIL`。
 这是「最后一个动作把被操作对象本身消灭掉」这类目标的常态 —— 点完签到按钮，按钮就没了，模型
 找不到还能操作的东西，于是一个其实已经成功的目标被它报成 `BLOCKED`。
 
+### `browser_task(task, url="", session="default", max_subgoals=12, max_steps_per_subgoal=15, verbose=False)`
+给多阶段、多页面的任务用。规划模型（Anthropic Messages API：`PLANNER_MODEL`，默认 `claude-opus-5-5`，
+`PLANNER_EFFORT=low`）读任务和页面，写出简短、字面化的子目标，每个都带确定性断言。每一步仍由决策模型来走：
+子目标通过 `browser_goal` 执行，断言由代码检查；只有失败、换了页面、或每四个子目标之后才再问规划模型。
+连续三个子目标失败就停下。规划模型只输出文字（目标和白名单内的断言，没有 `js`），所以付款/删除/下单
+仍会被确认护栏拦下，任务以 `blocked` 结束。它读到的是和决策模型相同的、已脱敏的元素表和文本。
+返回每个子目标的成败、答案和耗时拆分。单页上的一个简短意图，`browser_goal` 更快。
+
 ### `browser_tabs` · `browser_sessions` · `browser_close` · `browser_doctor`
 标签页管理（列 / 新建 / 切换 / 关闭）、会话列举、收尾，以及自检 —— 报告找到的是哪个浏览器、
 能不能连上。
@@ -620,6 +629,10 @@ decisions 路由）。给了 `verify` 检查时返回 `verified: PASS/FAIL`。
 | 否 | `TYPESAFE_MODEL` | `jev-latest` | 决策模型的 slug |
 | 否 | `TEXT_MODEL_API_KEY` | — | 可选；只给 `browser_goal` 用的小文本助手（往输入框里写值）。不设时该助手继承决策模型的 provider |
 | 否 | `TEXT_MODEL_BASE_URL` | `https://api.deepseek.com/v1` | 该助手的地址；设了它**或** `TEXT_MODEL_API_KEY` 就等于放弃继承决策模型的 provider |
+| 否 | `PLANNER_API_KEY` | `ANTHROPIC_API_KEY` | `browser_task` 规划模型的 key（Anthropic Messages API） |
+| 否 | `PLANNER_BASE_URL` | `https://api.anthropic.com` | 规划模型的地址，例如本地代理 |
+| 否 | `PLANNER_MODEL` | `claude-opus-5-5` | 规划模型 |
+| 否 | `PLANNER_EFFORT` | `low` | 作为 `output_config.effort` 发送；留空则不发 |
 | 否 | `TEXT_MODEL` | `deepseek-chat` | 该助手用的模型；助手继承 provider 时必须显式指定（`deepseek-chat` 不是 OpenRouter 的 slug） |
 
 `JEVMCP_MODE=attach` 是「用我已经开着的那个浏览器」这条路 —— 需要的登录态本来就在你自己的 profile

@@ -61,7 +61,7 @@ def test_the_manifest_advertises_exactly_the_tools_the_server_registers():
     assert advertised == registered, (
         "mcpb/manifest.json advertises " + str(advertised) + " but the server registers " + str(registered)
     )
-    assert len(advertised) == 10, "the docs say ten tools"
+    assert len(advertised) == 11, "the docs say eleven tools"
 
 
 def test_the_entry_point_is_a_launcher_and_not_a_package_module():

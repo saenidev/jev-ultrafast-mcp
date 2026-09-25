@@ -193,7 +193,7 @@ def test_the_publish_workflow_cannot_fire_on_an_ordinary_push():
 
 def test_every_registered_tool_is_named_where_a_reader_looks():
     tools = _registered_tools()
-    assert len(tools) == 10, f"the READMEs say ten tools; the server registers {len(tools)}"
+    assert len(tools) == 11, f"the READMEs say eleven tools; the server registers {len(tools)}"
 
     for path in (README, README_ZH, ROOT / "llms.txt"):
         text = path.read_text(encoding="utf-8")

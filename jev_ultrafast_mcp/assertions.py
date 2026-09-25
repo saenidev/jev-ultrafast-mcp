@@ -15,7 +15,7 @@ from .observe import Observation
 
 CHECK_TYPES = [
     "url_matches", "url_contains", "title_matches", "text_contains", "text_absent",
-    "element_exists", "element_gone", "value_equals", "checked", "count_at_least",
+    "element_exists", "element_gone", "value_equals", "value_named", "checked", "count_at_least",
     "js",
 ]
 
@@ -114,6 +114,39 @@ def _one(kind: str, check: dict, observation: Observation, allow_js: bool, eval_
         actual = element.value or element.current or ""
         found = str(actual) == str(expected)
         return (_ok if found else _fail)(kind, f"{ref} value={actual!r} vs expected={expected!r}")
+    if kind == "value_named":
+        # `value_equals` needs a ref, which only exists once the page has been read -- so a check
+        # written before the page it applies to (a plan) cannot use it. This finds the field by
+        # role and name instead. A substring match by default, case-folded: a combobox that took
+        # "JFK" shows "John F. Kennedy International (JFK)". `contains: false` asks for equality.
+        name = _needle(check, "name")
+        expected = _needle(check, "value")
+        if not name or not expected:
+            return _fail(kind, "value_named needs a non-empty 'name' and 'value'")
+        role = check.get("role") or None
+        contains = check.get("contains", True)
+        if isinstance(contains, str):
+            contains = contains.strip().lower() not in {"false", "0", "no", "off", ""}
+        matches = observation.find(role, name)
+        if not matches:
+            return _fail(kind, f"no field with role={role!r} name={name!r}")
+        want = " ".join(expected.split()).casefold()
+        seen = []
+        for element in matches:
+            if element.secret:
+                # A masked value is never read back, not even to compare it.
+                seen.append(f"{element.ref} «hidden»")
+                continue
+            for actual in (element.value, element.current):
+                have = " ".join((actual or "").split()).casefold()
+                if have and (want in have if contains else want == have):
+                    return _ok(kind, f"{element.ref} {element.name!r} value={actual!r} "
+                                     f"{'contains' if contains else 'equals'} {expected!r}")
+            seen.append(f"{element.ref} {(element.value or element.current or '')!r}")
+        # A value asserted against a secret field is itself a secret; it is not echoed either.
+        shown = "the expected value" if any(e.secret for e in matches) else repr(expected)
+        return _fail(kind, f"{len(matches)} field(s) named {name!r}; none "
+                           f"{'contains' if contains else 'equals'} {shown}: {', '.join(seen[:3])}")
     if kind == "checked":
         ref = check.get("ref")
         element = observation.by_ref.get(ref or "")
