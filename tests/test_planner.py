@@ -794,7 +794,7 @@ def test_field_shows_never_reads_a_secret():
 def test_the_prompt_plans_whole_tasks_in_few_subgoals_and_never_removes_rows():
     for phrase in ("Plan the WHOLE task", "as FEW subgoals", "field_shows", "never for a field's value",
                    "never after a", "Never remove a row or chip", "Remove/Delete/Clear", "p (pick)",
-                   "View more flights", '"k":"min"'):
+                   "including ones not in your element list", "never \"Flight details\"", '"k":"min"'):
         assert phrase in planner.SYSTEM, phrase
 
 
