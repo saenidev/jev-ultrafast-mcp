@@ -910,3 +910,7 @@ def test_a_repeated_field_named_by_position_is_read_literally(goal, field, value
 def test_the_system_prompt_names_repeated_fields_by_position():
     assert "Type \"KIX\" into the third Where to? field" in planner.SYSTEM
     assert "one subgoal per" in planner.SYSTEM and "by POSITION" in planner.SYSTEM
+
+
+def test_the_system_prompt_says_the_pick_waits_for_results():
+    assert "The pick itself waits for results to render" in planner.SYSTEM

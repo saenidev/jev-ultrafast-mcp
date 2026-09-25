@@ -328,7 +328,8 @@ def browser_act(ops: list[dict], session: str = "default", dry_run: bool = False
 
     op              fields
     click           ref                     (ref may be "e12", or "e12" of a combobox to open it)
-    click_best      number_regex, [role], [name_regex], [key=min_number|max_number], [confirm]
+    click_best      number_regex, [role], [name_regex], [key=min_number|max_number], [confirm],
+                    [wait_s=8] (waits that long for a first candidate while results render)
                     Click, with no model, the visible element (of `role`, name matching
                     `name_regex`) whose name gives the smallest/largest number through
                     `number_regex` (first capture group, commas removed); a tie goes to the

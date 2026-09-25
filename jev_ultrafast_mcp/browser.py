@@ -1210,6 +1210,11 @@ class Session:
     # ---------------------------------------------------------- click_best
     # (CLICK_BEST_MAX_ACTIONS: the element cap of click_best's own wide read.)
 
+    def _click_best_read(self, raw_op: dict) -> None:
+        """A read wide enough to hold every candidate, the regex's words ranked first."""
+        words = [w.lower() for w in re.findall(r"[A-Za-z]{3,}", str(raw_op.get("name_regex") or ""))]
+        self.observe(include_text=False, max_actions=CLICK_BEST_MAX_ACTIONS, prefer=words[:6])
+
     def _click_best(self, raw_op: dict, *, dry_run: bool, strict: bool, started: float) -> Step:
         """Click the matching element whose name carries the smallest (or largest) number.
 
@@ -1233,9 +1238,21 @@ class Session:
             # among the omitted and the pick found no candidates. The comparison needs every
             # candidate, so it reads the page again with a wide cap and the regex's words first.
             # Refs are node ids, stable across reads; the click below runs on this read.
-            words = [w.lower() for w in re.findall(r"[A-Za-z]{3,}", str(raw_op.get("name_regex") or ""))]
-            self.observe(include_text=False, max_actions=CLICK_BEST_MAX_ACTIONS, prefer=words[:6])
+            self._click_best_read(raw_op)
             choice = best_candidate(self.last, raw_op)
+        if choice["element"] is None and not dry_run:
+            # Measured on Google Flights multi-city: the pick ran the instant Search (or the last
+            # leg's pick) was clicked, while results still rendered: 0 candidates, and the planner
+            # spent a "wait for results" subgoal plus an Opus call per leg. Wait for candidates.
+            try:
+                wait_s = min(max(float(raw_op.get("wait_s", CLICK_BEST_WAIT_S)), 0.0), 20.0)
+            except (TypeError, ValueError):
+                return refuse("invalid_request", "click_best wait_s must be a number of seconds")
+            deadline = time.monotonic() + wait_s
+            while choice["element"] is None and time.monotonic() < deadline:
+                time.sleep(0.5)
+                self._click_best_read(raw_op)
+                choice = best_candidate(self.last, raw_op)
         if choice["element"] is None:
             return refuse("no_candidates", choice["summary"])
         element = choice["element"]
@@ -1491,6 +1508,8 @@ CLICK_BEST_KEYS = {"min_number", "max_number"}
 # click_best compares every candidate, so it reads with a cap this wide (a flight results page with
 # "View more flights" open is ~350 controls). Only that one read is wide; Jev's reads keep theirs.
 CLICK_BEST_MAX_ACTIONS = 1500
+# How long click_best waits for a first candidate (results still rendering); `wait_s` overrides.
+CLICK_BEST_WAIT_S = 8.0
 
 
 def _elapsed_ms(started: float) -> int:

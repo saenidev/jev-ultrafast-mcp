@@ -204,3 +204,32 @@ def test_candidates_beyond_the_table_cap_are_still_compared(manager):
     assert step["ok"], step
     assert session.evaluate_js("document.title") == "PICKED 3", step
     assert "5 candidates" in step["detail"], step
+
+
+def test_the_pick_waits_for_results_that_are_still_loading(manager):
+    """Measured on Google Flights multi-city: the pick ran the instant Search (or the previous
+    leg's pick) was clicked, found 0 candidates while results rendered, and the planner spent two
+    extra subgoals (and two extra Opus calls) waiting. The pick waits for its candidates."""
+    later = ("<script>setTimeout(() => { document.body.insertAdjacentHTML('beforeend', "
+             + repr("".join(_flight(i, p) for i, p in enumerate(["540", "198", "260"])))
+             + "); }, 1500);</script>")
+    session = manager.start("best-late", "data:text/html," + quote(_page("", later)))
+    session.observe()
+
+    step = _best(session, name_regex="^From [0-9,]+ US dollars", key="min_number")
+
+    assert step["ok"], step
+    assert session.evaluate_js("document.title") == "PICKED 1", step
+    assert "3 candidates" in step["detail"], step
+
+
+def test_a_pick_with_nothing_to_wait_for_gives_up_within_its_wait(manager):
+    import time
+    session = manager.start("best-none-wait", "data:text/html," + quote(COVERED))
+    session.observe()
+    started = time.monotonic()
+
+    step = _best(session, name_regex="Lufthansa", wait_s=1)
+
+    assert not step["ok"] and step["error"] == "no_candidates", step
+    assert time.monotonic() - started < 4, "a no-candidate pick must not hang"

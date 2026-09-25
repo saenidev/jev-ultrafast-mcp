@@ -169,7 +169,8 @@ matching element on the whole page, including ones not in your element list, so 
 the results appear: no scrolling or "View more" subgoal is needed first. Example, result links \
 named "From 198 US dollars. 1 stop flight ...": "p":{"r":"link","re":"^From [0-9,]+ US dollars",\
 "k":"min","nr":"From ([0-9,]+)"}. Pick the result LINKS carrying the price, never "Flight details" \
-buttons. After a pick, the next screen may be a new results list (the next leg): pick again.
+buttons. The pick itself waits for results to render, so never add a "wait for results" \
+subgoal. After a pick, the next screen may be a new results list (the next leg): pick again.
 - fin: true when completing every sg completes the task and nothing is left to read from the \
 final page; false when you must see the final page to answer.
 - done=true only when the page already shows the task complete or it cannot proceed (login wall, \
