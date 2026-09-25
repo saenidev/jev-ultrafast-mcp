@@ -12,6 +12,7 @@ the rest of the server behaves identically.
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import math
 import os
@@ -595,6 +596,35 @@ def _no_text_route(cfg: Config) -> str:
     )
 
 
+# The text helper's latency has a long tail: replaying 18 real field requests against the
+# configured free model, 17 answered in 1.0-1.3 s and one took 19.6 s, which is what made a
+# 17 s checkout take 38 s. A duplicate request sent once the first is clearly late, taking
+# whichever answers first, removes that tail. Only for the text helper: its requests are
+# idempotent reads (a value to type), unlike a decision, and the configured model is free.
+TEXT_HEDGE_AFTER = float(os.environ.get("JEVMCP_TEXT_HEDGE_AFTER", "3.0"))
+_HEDGE_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="text-hedge")
+
+
+def _hedged_post(url: str, key: str, body: dict) -> object:
+    first = _HEDGE_POOL.submit(_post, url, key, body)
+    if TEXT_HEDGE_AFTER <= 0:
+        return first.result()
+    try:
+        return first.result(timeout=TEXT_HEDGE_AFTER)
+    except concurrent.futures.TimeoutError:
+        pass
+    second = _HEDGE_POOL.submit(_post, url, key, body)
+    pending = {first, second}
+    error: BaseException | None = None
+    while pending:
+        done, pending = concurrent.futures.wait(pending, return_when=concurrent.futures.FIRST_COMPLETED)
+        for future in done:
+            if future.exception() is None:
+                return future.result()
+            error = future.exception()
+    raise error  # both failed: report the last failure, as a single request would have
+
+
 def text_for(cfg: Config, goal: str, element, observation: Observation,
              history: list[dict]) -> str:
     """Field values need generation, which the decision model does not do.
@@ -622,7 +652,7 @@ def text_for(cfg: Config, goal: str, element, observation: Observation,
         "page": {"title": observation.title, "text": observation.text[:6000]},
         "recent_actions": history[-6:],
     }
-    result = _post(base + "/chat/completions", cfg.text_model_key, {
+    result = _hedged_post(base + "/chat/completions", cfg.text_model_key, {
         "model": cfg.text_model,
         "max_tokens": 1024,
         "response_format": {"type": "json_object"},
