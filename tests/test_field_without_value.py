@@ -378,3 +378,72 @@ def test_earlier_pages_reach_the_decision_request(monkeypatch):
     assert sent[0]["state"]["earlier_pages"] == notes
     policy.choose(cfg, _observation([button]), "close it", [])
     assert "earlier_pages" not in sent[1]["state"], "no key at all when nothing was left behind"
+
+
+def _post_with(probabilities, target_ref="e1"):
+    def fake_post(url, key, body):
+        ids = list(body["questions"]["operation"]["criteria"])
+        probs = {n: probabilities.get(n, 0.0) for n in ids}
+        top = max(probs, key=probs.get)
+        answers = {"operation": {"choice": top, "confidence": probs[top], "probabilities": probs}}
+        for qid, q in body["questions"].items():
+            if qid.endswith("_target"):
+                refs = list(q["criteria"])
+                answers[qid] = {"choice": refs[0], "confidence": 1.0,
+                                "probabilities": {r: float(r == refs[0]) for r in refs}}
+        return {"answers": answers}
+    return fake_post
+
+
+def _choose_with(monkeypatch, probabilities, second_chance=True):
+    monkeypatch.setattr(policy, "_post", _post_with(probabilities))
+    cfg = _text_cfg()
+    cfg.typesafe_key = "k"
+    button = Element(ref="e1", role="button", name="Accept all cookies")
+    return policy.choose(cfg, _observation([button]), "buy a kettle", [], second_chance=second_chance)
+
+
+def test_a_weak_blocked_beside_a_near_tied_action_takes_the_action(monkeypatch):
+    d = _choose_with(monkeypatch, {"BLOCKED": 0.37, "CLICK": 0.32, "SCROLL": 0.2, "WAIT": 0.11})
+    assert d["operation"] == "CLICK" and d["ref"] == "e1" and d["overrode"] == "BLOCKED", d
+
+
+def test_a_confident_blocked_stands(monkeypatch):
+    d = _choose_with(monkeypatch, {"BLOCKED": 0.62, "CLICK": 0.30, "SCROLL": 0.08})
+    assert d["operation"] == "BLOCKED" and "overrode" not in d, d
+
+
+def test_a_weak_blocked_far_ahead_of_any_action_stands(monkeypatch):
+    d = _choose_with(monkeypatch, {"BLOCKED": 0.45, "CLICK": 0.10, "SCROLL": 0.25, "WAIT": 0.20})
+    assert d["operation"] == "BLOCKED", "scrolling or waiting is not an action taken over BLOCKED"
+
+
+def test_no_override_without_a_second_chance(monkeypatch):
+    d = _choose_with(monkeypatch, {"BLOCKED": 0.37, "CLICK": 0.32, "SCROLL": 0.2, "WAIT": 0.11},
+                     second_chance=False)
+    assert d["operation"] == "BLOCKED", d
+
+
+def test_the_goal_loop_bounds_the_overrides(monkeypatch):
+    """Three near-ties become actions; the fourth BLOCKED is final."""
+    from jev_ultrafast_mcp.server import WEAK_BLOCKED_OVERRIDES
+    button = Element(ref="e1", role="button", name="Accept all cookies")
+    tab = _Tab(_observation([button]))
+    chances = []
+
+    def fake_choose(_cfg, _obs, _goal, _history, second_chance=False, **_kw):
+        chances.append(second_chance)
+        if second_chance:
+            return {"operation": "CLICK", "ref": "e1", "target": "Accept all cookies",
+                    "confidence": 0.32, "overrode": "BLOCKED",
+                    "probabilities": {"BLOCKED": 0.37, "CLICK": 0.32}}
+        return {"operation": "BLOCKED", "ref": None, "confidence": 0.37}
+
+    monkeypatch.setattr(server.policy, "available", lambda _cfg: True)
+    monkeypatch.setattr(server.policy, "choose", fake_choose)
+    monkeypatch.setattr(server, "_session", lambda _name: tab)
+    out = server.browser_goal("buy a kettle", max_steps=10, verbose=True)
+    assert chances[:WEAK_BLOCKED_OVERRIDES] == [True] * WEAK_BLOCKED_OVERRIDES
+    assert chances[WEAK_BLOCKED_OVERRIDES] is False, chances
+    assert out.count("taking the action") == WEAK_BLOCKED_OVERRIDES, out
+    assert "status: blocked" in out, out

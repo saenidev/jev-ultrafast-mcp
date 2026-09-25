@@ -192,6 +192,7 @@ def _error(exc: Exception) -> str:
 
 
 PAGE_NOTES = 4          # pages remembered per goal
+WEAK_BLOCKED_OVERRIDES = 3  # per goal: a weak BLOCKED replaced by a near-tied action
 PAGE_NOTE_CHARS = 700   # of each page's text
 
 
@@ -499,6 +500,7 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
         # current page, so a value read on one page (a ticket number in an article) was gone by
         # the time the page that needed it came up.
         pages_seen: list[dict] = []
+        weak_blocked_left = WEAK_BLOCKED_OVERRIDES  # see policy.WEAK_BLOCKED
         valueless_at: dict[int, str] = {}  # this run's no-value and refused-Enter steps -> page URL
         started = time.perf_counter()
         if url:
@@ -520,7 +522,8 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                         **({"where": valueless_at[id(step)]} if id(step) in valueless_at else {})}
                        for step in tab.history[run_start:][-10:]]
             try:
-                decision = policy.choose(CONFIG, observation, goal, history, pages_seen=pages_seen)
+                decision = policy.choose(CONFIG, observation, goal, history, pages_seen=pages_seen,
+                                         second_chance=weak_blocked_left > 0)
             except policy.TurboUnavailable as exc:
                 # A provider that fails mid-run must not erase the steps already
                 # taken: those are the whole record of how far the goal got, and
@@ -533,6 +536,12 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
             model_ms += decision.get("latency_ms") or 0
             tokens += _tokens(decision.get("usage"))
             operation = decision["operation"]
+            if decision.get("overrode"):
+                weak_blocked_left -= 1
+                probabilities = decision.get("probabilities") or {}
+                trace.append(f"  -   BLOCKED only {probabilities.get('BLOCKED', 0):.2f} against "
+                             f"{operation} {probabilities.get(operation, 0):.2f}; taking the action "
+                             f"({weak_blocked_left} such overrides left)")
             if operation in {"DONE", "BLOCKED"}:
                 # "Nothing to act on" about a page that has not finished
                 # rendering is not an answer about the goal, it is an answer
