@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## Unreleased (general-browser-use, part 3)
 
+- `browser_goal(until=[checks])`: browser_assert-style checks (never `js`) run on the page the loop
+  already reads after each action; once they pass after at least one action the goal ends `done`
+  with `until: met after N steps`, without a DONE decision request.
+- A decision request the provider refuses (HTTP 400/413; measured on a 250-result flights page:
+  `max_tokens_exceeded` at 97 KB) is retried once with half the targets per head, half the state
+  elements and half the page text, goal-named controls kept. Requests over 80 KB are trimmed before
+  sending. A redacted shape-only record goes to `$JEVMCP_STATE_DIR/last-http-error.json`.
+- `browser_act` op `click_best`: click the visible element whose name gives the smallest/largest
+  number (`number_regex`), no model, through the ordinary click rails. `server.run_click_best`.
+
 - Enter/Space rail closes the second review's gaps: the field's form *and* dialog, through shadow
   roots and custom-element buttons, and the nearest button-holding wrapper when there is neither.
   Hidden, disabled, and (inside a form) `type=button` controls are not what Enter presses, so an

@@ -13,6 +13,7 @@ hundred bytes on the wire instead of a full guard table.
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -898,6 +899,9 @@ class Session:
                 if wire.hits:
                     return self._tripped(op, ref, target_label, wire.hits)
 
+            elif op == "click_best":
+                return self._click_best(raw_op, dry_run=dry_run, strict=strict, started=started)
+
             elif op == "type":
                 target_label = self._label(ref)
                 # `type` clicks its target first, so a `type` aimed at a button is a click that the
@@ -1200,6 +1204,43 @@ class Session:
             self._record(raw_op, op, ref, target_label)
         return step
 
+    # ---------------------------------------------------------- click_best
+
+    def _click_best(self, raw_op: dict, *, dry_run: bool, strict: bool, started: float) -> Step:
+        """Click the matching element whose name carries the smallest (or largest) number.
+
+        Measured on live Google Flights: asked in words for the cheapest of 250 results, the
+        decision model failed the subgoal twice. Comparing numbers is code's job. The choice is
+        made on the last observation; the click itself is the `click` op on the chosen ref, run
+        through `_run_op`, so the freshness guard, the confirmation rail, the tripwire and the
+        occlusion check are the ones every click gets -- this op adds no second door.
+        """
+        def refuse(error: str, detail: str) -> Step:
+            return Step(op="click_best", ok=False, error=error, detail=detail[:300],
+                        ms=_elapsed_ms(started))
+
+        try:
+            choice = best_candidate(self.last, raw_op)
+        except ValueError as exc:
+            return refuse("invalid_request", str(exc))
+        if choice["element"] is None:
+            return refuse("no_candidates", choice["summary"])
+        element = choice["element"]
+        shown = _number_text(choice["number"])
+        about = (f"chose {element.ref} number={shown} among {choice['candidates']} candidates"
+                 + (f" ({choice['covered']} covered excluded)" if choice["covered"] else "")
+                 + (f" ({choice['disabled']} disabled excluded)" if choice["disabled"] else ""))
+        if dry_run:
+            return Step(op="click_best", ok=True, ref=element.ref, target=element.name,
+                        detail=f"dry run: {about}", ms=_elapsed_ms(started))
+        click = {"op": "click", "ref": element.ref,
+                 **({"confirm": True} if raw_op.get("confirm") else {})}
+        step = self._run_op(click, dry_run=False, strict=strict)
+        step.op = "click_best"
+        step.detail = about + (f": {step.detail}" if step.detail else "")
+        step.ms = _elapsed_ms(started)
+        return step
+
     # ------------------------------------------------------- input mechanics
 
     def _do_click(self, ref: str) -> None:
@@ -1431,6 +1472,79 @@ class Session:
         descriptor = macros_mod.describe(raw_op, op, ref, label, self.last)
         if descriptor is not None:
             self._recorder.append(descriptor)
+
+
+CLICK_BEST_KEYS = {"min_number", "max_number"}
+
+
+def _elapsed_ms(started: float) -> int:
+    """Whole milliseconds since `started`: an int, like every `ms` a step reports."""
+    return int((time.monotonic() - started) * 1000)
+
+
+def _number_text(value: float) -> str:
+    return str(int(value)) if float(value).is_integer() else str(value)
+
+
+def best_candidate(observation: Observation | None, spec: dict) -> dict:
+    """The element `click_best` would click, and how it was chosen. Pure: reads, never acts.
+
+    Candidates are the observed elements with the spec's `role` (any role when absent) whose name
+    (or label, for a nameless one) matches `name_regex` (case-insensitive; any name when absent)
+    and yields a number through `number_regex`: its first capture group, else the whole match,
+    commas removed. Covered and disabled elements are counted and left out -- a click on them is
+    refused anyway. `key` is `min_number` (default) or `max_number`; a tie goes to the first in
+    document order. Raises ValueError for a malformed spec.
+    """
+    key = str(spec.get("key") or "min_number")
+    if key not in CLICK_BEST_KEYS:
+        raise ValueError(f"click_best key must be one of {sorted(CLICK_BEST_KEYS)}, not {key!r}")
+    number_source = str(spec.get("number_regex") or "")
+    if not number_source:
+        raise ValueError("click_best needs 'number_regex' (e.g. \"From ([\\d,]+) US dollars\")")
+    try:
+        number_re = re.compile(number_source, re.I)
+        name_re = re.compile(str(spec.get("name_regex") or ""), re.I)
+    except re.error as exc:
+        raise ValueError(f"click_best regex does not compile: {exc}") from None
+    role = str(spec.get("role") or "").strip().lower()
+
+    matched: list[tuple[float, Element]] = []
+    covered = disabled = 0
+    for element in (observation.elements if observation else []):
+        if role and element.role != role:
+            continue
+        name = element.name or element.label or ""
+        if not name_re.search(name):
+            continue
+        found = number_re.search(name)
+        if not found:
+            continue
+        raw = found.group(1) if found.re.groups else found.group(0)
+        try:
+            number = float((raw or "").replace(",", "").strip())
+        except ValueError:
+            continue
+        if element.occluded:
+            covered += 1
+            continue
+        if element.disabled:
+            disabled += 1
+            continue
+        matched.append((number, element))
+
+    best: tuple[float, Element] | None = None
+    for number, element in matched:  # document order; strict comparison keeps the first of a tie
+        if best is None or (number < best[0] if key == "min_number" else number > best[0]):
+            best = (number, element)
+    summary = (f"{len(matched)} candidates" + (f", {covered} covered" if covered else "")
+               + (f", {disabled} disabled" if disabled else ""))
+    if best is None:
+        summary = (f"no reachable {role or 'element'} matches name_regex "
+                   f"{spec.get('name_regex')!r} with a number for {number_source!r} ({summary})")
+    return {"element": best[1] if best else None, "number": best[0] if best else None,
+            "candidates": len(matched), "covered": covered, "disabled": disabled, "key": key,
+            "summary": summary}
 
 
 def _error_code(exc: Exception) -> str:

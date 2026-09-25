@@ -17,6 +17,7 @@ from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 
 from . import assertions as assertions_mod
+from . import browser as browser_mod
 from . import macros as macros_mod
 from . import planner as planner_mod
 from . import policy
@@ -324,6 +325,15 @@ def browser_act(ops: list[dict], session: str = "default", dry_run: bool = False
 
     op              fields
     click           ref                     (ref may be "e12", or "e12" of a combobox to open it)
+    click_best      number_regex, [role], [name_regex], [key=min_number|max_number], [confirm]
+                    Click, with no model, the visible element (of `role`, name matching
+                    `name_regex`) whose name gives the smallest/largest number through
+                    `number_regex` (first capture group, commas removed); a tie goes to the
+                    first in page order. Covered and disabled elements are never candidates.
+                    Same click path and confirmation rail as `click`. Example:
+                    {"op": "click_best", "role": "link", "name_regex": "US dollars",
+                     "key": "min_number", "number_regex": "From ([\\d,]+) US dollars"}
+                    The step reports the chosen ref, its number and the candidate count.
     type            ref, text, [clear=true], [submit=false]
     select          ref, value (option value or label)
     toggle          ref, [state]            (checkbox/radio/switch; no state = flip)
@@ -359,6 +369,42 @@ def browser_act(ops: list[dict], session: str = "default", dry_run: bool = False
         return _render_act(payload)
     except (ChromeLaunchError, CdpError, PageStale, SafetyError, ValueError) as exc:
         return _error(exc)
+
+
+def run_click_best(session: str, spec: dict) -> str:
+    """`click_best` for code that is not the MCP host: the planner's deterministic step.
+
+    `spec` is the op without `"op"` (role, name_regex, key, number_regex, confirm). Runs through
+    `Session.act`, so the rails and the after-action read are the same as `browser_act`'s.
+
+    The first line is machine-readable:
+        click_best: ok ref=e123 number=198 candidates=5 covered=1 target="From 198 US dollars..."
+        click_best: failed error=<code> detail="..."
+    followed by the usual act rendering (the delta view of the page).
+    """
+    try:
+        tab = _session(session)
+        if tab.last is None:
+            tab.observe()
+        choice = None
+        try:
+            choice = browser_mod.best_candidate(tab.last, spec or {})
+        except ValueError:
+            pass  # the op reports the same refusal below
+        payload = tab.act([{**(spec or {}), "op": "click_best"}], stop_on_error=True,
+                          observe_after=True)
+        step = payload["ops"][0]
+        if step.get("ok") and choice is not None and choice["element"] is not None:
+            head = (f"click_best: ok ref={step.get('ref')} "
+                    f"number={browser_mod._number_text(choice['number'])} "
+                    f"candidates={choice['candidates']} covered={choice['covered']} "
+                    f"target={json.dumps((step.get('target') or '')[:120], ensure_ascii=False)}")
+        else:
+            head = (f"click_best: failed error={step.get('error') or 'unknown'} "
+                    f"detail={json.dumps((step.get('detail') or '')[:240], ensure_ascii=False)}")
+        return head + "\n" + _render_act(payload)
+    except (ChromeLaunchError, CdpError, PageStale, SafetyError, ValueError) as exc:
+        return f"click_best: failed error=exception detail={json.dumps(_error(exc)[:240])}"
 
 
 @SERVER.tool(annotations=READ_ONLY)
@@ -477,7 +523,8 @@ STALE_REF_RETRIES = 3
 
 @SERVER.tool(annotations=WRITES)
 def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: int = 20,
-                 verify: list[dict] | None = None, verbose: bool = False) -> str:
+                 verify: list[dict] | None = None, verbose: bool = False,
+                 until: list[dict] | None = None) -> str:
     """Hand a whole browser task over. Needs a decision-model key.
 
     This is the entry point for browser work, not an optimisation on top of the
@@ -497,6 +544,15 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
     OPENROUTER_API_KEY and no TypeSafe account. Same model, same contract either
     way. Reading a page needs no key at all, so when no key is set the handoff is
     unavailable while browser_open, browser_observe and browser_act keep working.
+
+    `until` takes browser_assert-style checks (no `js` checks: they never run here) that say
+    the goal is finished. They are checked on the page the loop already reads after every
+    action, and the goal stops as soon as they all pass -- status `done`, with the line
+    `until: met after N steps` -- without spending a decision request on DONE. Checks that
+    already hold before the first step do not end the goal: the model still decides the
+    first step, and the goal ends once they hold after at least one action (or when the model
+    says DONE, reported as `until: met after 0 steps`). When they never pass the output says
+    `until: not met` with the failing checks.
     """
     if not policy.available(CONFIG):
         return ("turbo_unavailable: no decision-model key is set, so the task cannot be "
@@ -530,6 +586,17 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
         trace: list[str] = []
         status = "running"
         steps = 0
+        # Deterministic end-of-goal checks (see the docstring). `js` never runs on this path.
+        until_checks = list(until or [])
+        until_result: dict | None = None
+        until_initially = False
+        until_met_at: int | None = None
+        if until_checks:
+            until_result = assertions_mod.run(until_checks, observation, allow_js=False)
+            until_initially = until_result["pass"]
+            if until_initially:
+                trace.append("  -   until: already true before the first step; the model "
+                             "still decides it")
         stale = 0        # re-observations spent on the step currently in flight
         recovered = 0    # re-observations spent by the goal as a whole
         re_read = False  # the one re-read allowed when the first answer is BLOCKED
@@ -589,6 +656,9 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                              f"{operation} {probabilities.get(operation, 0):.2f}; taking the action "
                              f"({weak_blocked_left} such overrides left)")
             if operation in {"DONE", "BLOCKED"}:
+                if (operation == "DONE" and until_result is not None and until_result["pass"]
+                        and until_met_at is None):
+                    until_met_at = steps
                 # "Nothing to act on" about a page that has not finished
                 # rendering is not an answer about the goal, it is an answer
                 # about the clock. Re-read once, only while nothing has been
@@ -690,6 +760,16 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
             left = observation
             observation = tab.last or tab.observe()
             _note_page_left(pages_seen, left, observation)
+            if until_checks:
+                # The page the loop already holds: no extra read. After an action whose checks
+                # fail there is no wait here either -- the next decision can be WAIT.
+                until_result = assertions_mod.run(until_checks, observation, allow_js=False)
+                if until_result["pass"]:
+                    until_met_at = steps
+                    status = "done"
+                    trace.append(f"  =   until: all {len(until_checks)} checks pass after step "
+                                 f"{steps}; no DONE decision needed")
+                    break
             # `act` already counts how long the page has stood still; the loop
             # used to drop that count on the floor and keep paying one decision
             # request per step until `max_steps`. Measured on a real daily
@@ -738,6 +818,14 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
                 status = "unconfirmed: the model reported done, the page does not prove it"
 
         lines = [f"goal: {goal}", f"status: {status}", f"steps: {steps}"]
+        if until_result is not None:
+            if until_met_at is not None:
+                lines.append(f"until: met after {until_met_at} step{'s' if until_met_at != 1 else ''}"
+                             + (" (true before the first step)" if until_initially else ""))
+            else:
+                failing = [c for c in until_result["checks"] if not c["ok"]]
+                lines.append("until: not met (" + "; ".join(
+                    f"{c['type']}: {c['detail']}" for c in failing)[:300] + ")")
         if calls:
             # What the handoff cost, in units the caller can check for itself.
             # The whole argument for delegating a browser flow is that the agent
