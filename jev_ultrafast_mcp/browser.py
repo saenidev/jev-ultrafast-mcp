@@ -40,7 +40,11 @@ HELPER_SRC = (Path(__file__).with_name("js") / "observer.js").read_text(encoding
 # The extension's constant was held to this one by `act-parity.mjs` and the
 # source's was held to nothing, which is how 7 here and 6 in the page survived a
 # release. `tests/test_helper_version.py` pins all three now.
-HELPER_VERSION = 11
+HELPER_VERSION = 12
+
+# How long a page with content and no controls must hold still (and have stopped fetching)
+# before `observe` accepts that it has none. Longer than the late-paint fixture's 1.2 s timer.
+QUIET_NO_ACTIONS = 1.5
 
 MODIFIERS = {
     "alt": 1, "option": 1,
@@ -490,6 +494,35 @@ class Session:
             raise PageStale("Page produced no snapshot (still navigating?)")
         return json.loads(raw)
 
+    def _requests_in_flight(self) -> bool:
+        """Whether this page has a request it has not finished, from the events since the last clear.
+
+        `page_is_idle` answers only for a navigation we issued; a page reached by clicking a link
+        is just as likely to be a shell waiting on its bundle, so this counts the same `Network`
+        events without that gate.
+        """
+        self._drain_events()
+        sent: set[str] = set()
+        done: set[str] = set()
+        for message in self.cdp.events:
+            if message.get("sessionId") != self.page_session:
+                continue
+            method = message.get("method")
+            request_id = (message.get("params") or {}).get("requestId")
+            if not request_id:
+                continue
+            if method == "Network.requestWillBeSent":
+                sent.add(request_id)
+            elif method in ("Network.loadingFinished", "Network.loadingFailed"):
+                done.add(request_id)
+        return bool(sent - done)
+
+    def _dom_shape(self) -> object:
+        """A cheap fingerprint of the document: element count and text length."""
+        return self._safe_eval(
+            "document.body ? document.getElementsByTagName('*').length + ':' + "
+            "document.body.textContent.length : ''")
+
     def _page_has_nodes(self) -> bool:
         """True when the document has elements, actionable or not."""
         count = self._safe_eval("document.body ? document.body.childElementCount : 0")
@@ -518,11 +551,26 @@ class Session:
             # paints, so "the DOM stopped moving" would give up exactly when
             # patience was needed. Bounded, so a genuinely inert page costs one
             # timeout and nothing more.
+            #
+            # The one case that wait was wrong about is a page that is simply finished -- "Setup
+            # complete", "Order placed" -- which has text and no controls, and paid the whole
+            # budget (4 s) on every goal that ended there. So it also stops once the page has
+            # no request in flight *and* its DOM has held still for `QUIET_NO_ACTIONS`. Both, not
+            # either: a shell that is still downloading its bundle is still, but not idle, and a
+            # timer-driven render (the late-paint fixture: 1.2 s, no network) is idle but not
+            # yet still for long enough.
             deadline = time.monotonic() + self.cfg.settle_timeout
+            shape = self._dom_shape()
+            still_since = time.monotonic()
             while time.monotonic() < deadline:
                 time.sleep(self.cfg.settle_poll_ms / 1000.0)
                 data = self._read_state(include_text=include_text)
                 if data.get("actions"):
+                    break
+                now_shape = self._dom_shape()
+                if now_shape != shape:
+                    shape, still_since = now_shape, time.monotonic()
+                elif time.monotonic() - still_since >= QUIET_NO_ACTIONS and not self._requests_in_flight():
                     break
         observation = Observation.from_raw(
             data, mask_secrets=lambda name, role: is_secret(self.cfg, name, role)

@@ -26,7 +26,7 @@
   // satisfied, the server re-injected this whole file on every observation, and
   // a page holding the older helper was never actually upgraded, because the
   // early return fired on the number it already carried.
-  const VERSION = 11;
+  const VERSION = 12;
   try { if (W !== W.top) return; } catch (_) { return; }
   if (W.__jevMcp && W.__jevMcp.version === VERSION) return;
 
@@ -94,7 +94,30 @@
     || (rawAttr(e, 'type') || '').toLowerCase() === 'password'
     || (e && typeof e.type === 'string' && e.type.toLowerCase() === 'password');
 
+  // Per-read memo. One readState asks about thousands of elements that share ancestors, and the
+  // walk below re-checked every ancestor for each of them: measured on a long Wikipedia article
+  // (3,800 candidates, 13,000 text nodes), this function and the `closest`/`checkVisibility`
+  // calls it makes were over half of an 850 ms read. The DOM cannot change while one synchronous
+  // read runs, so each node's answer is computed once and reused. `null` outside a read, where
+  // callers (verify, reinspect, the click rail) keep the uncached walk.
+  let VIS = null;
+  const visibleMemo = n => {
+    if (!n || n.nodeType !== 1) return true;
+    const known = VIS.get(n);
+    if (known !== undefined) return known;
+    let ok = !(GET_ATTRIBUTE.call(n, 'aria-hidden') === 'true' || GET_ATTRIBUTE.call(n, 'inert') !== null);
+    if (ok) { try { ok = n.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }); } catch (_) { ok = false; } }
+    if (ok) {
+      let up = n.parentElement;
+      if (!up) { const root = n.getRootNode && n.getRootNode(); up = root && root instanceof ShadowRoot ? root.host : null; }
+      ok = visibleMemo(up);
+    }
+    VIS.set(n, ok);
+    return ok;
+  };
+
   const deepVisible = e => {
+    if (VIS) return visibleMemo(e);
     let n = e;
     while (n && n.nodeType === 1) {
       if (n.closest && n.closest('[aria-hidden="true"],[inert]')) return false;
@@ -319,6 +342,11 @@
   /* ------------------------------------------------------------ readState */
 
   const readState = opts => {
+    VIS = new Map();
+    try { return readStateOnce(opts); } finally { VIS = null; }
+  };
+
+  const readStateOnce = opts => {
     opts = opts || {};
     const maxActions = opts.maxActions || 250;
     const maxText = opts.maxText || 6000;
@@ -439,15 +467,18 @@
         options: options.slice(0, 40),
         opts_total: options.length,
         secret: secretField,
-        scope: clean(scopeOf(e) ? scopeOf(e).innerText : '').slice(0, 120),
       });
     }
 
     // Context only where a label repeats — shipping it unconditionally is waste.
     for (const b of built) {
       const key = b.role + '\u0000' + b.name.toLowerCase();
-      if ((count.get(key) || 0) > 1) b.context = b.scope;
-      delete b.scope;
+      // Read only here: `innerText` forces layout, and reading it for every candidate was a
+      // tenth of a read on a large page to fill a field that most elements then discarded.
+      if ((count.get(key) || 0) > 1) {
+        const scope = scopeOf(S.nodes.get(b.node));
+        b.context = clean(scope ? scope.innerText : '').slice(0, 120);
+      }
     }
 
     // Truncate by usefulness, then restore document order for readability, so

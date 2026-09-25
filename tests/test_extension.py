@@ -327,7 +327,7 @@ ACTION_TO_ELEMENT = {
 
 # The observer's own bookkeeping. `node`, `rank` and `order` are how it builds and sorts the list
 # and never reach the table; `scope` becomes `context`, and only where a label repeats.
-ACTION_BOOKKEEPING = {"node", "rank", "order", "scope"}
+ACTION_BOOKKEEPING = {"node", "rank", "order"}
 
 # A value for each key that differs from `BASE_ACTION`, so a field that is read into nothing shows
 # up as "no change" rather than as a passing test.
