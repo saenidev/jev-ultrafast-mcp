@@ -26,7 +26,7 @@
   // satisfied, the server re-injected this whole file on every observation, and
   // a page holding the older helper was never actually upgraded, because the
   // early return fired on the number it already carried.
-  const VERSION = 15;
+  const VERSION = 16;
   try { if (W !== W.top) return; } catch (_) { return; }
   if (W.__jevMcp && W.__jevMcp.version === VERSION) return;
 
@@ -339,6 +339,133 @@
     return SECRET_HINT.test(clean(nameOf(host)));
   };
 
+  /* ------------------------------------------------------ repeated labels */
+
+  // Whether a field's value must stay on the page: the same test the element table masks on,
+  // plus a contenteditable whose outermost editable host is secret.
+  const isSecretField = f => isPassword(f)
+    || (SECRET_HINT.test(clean(nameOf(f))) && isEditable(f))
+    || (!!f.isContentEditable && secretEditable(f));
+
+  // A scope's visible text, with every secret contenteditable's text cut out: its text is its
+  // value, and `innerText` would otherwise carry the card number the table masks. Memoised per
+  // read, because every repeated control in one form used to re-read the whole form's text.
+  const scopeText = (scope, memo) => {
+    if (!scope) return '';
+    if (memo.has(scope)) return memo.get(scope);
+    let text = clean(scope.innerText);
+    if (text) {
+      for (const x of [scope, ...scope.querySelectorAll('[contenteditable]')]) {
+        if (!x.isContentEditable || (x.parentElement && x.parentElement.isContentEditable)) continue;
+        if (!secretEditable(x)) continue;
+        const secret = clean(x.innerText);
+        if (secret) text = clean(text.split(secret).join(' '));
+      }
+    }
+    memo.set(scope, text);
+    return text;
+  };
+
+  // How far above a repeated control the walk for its own row may go. Bounded: each level is two
+  // `contains` calls, so a page of 400 repeated rows stays linear.
+  const CONTEXT_UP = 8;
+  // What the table shows of a context (`observe.py` cuts at 100): uniqueness is judged on that.
+  const SHOWN = 100;
+  const shown = s => (s.length <= SHOWN ? s : s.slice(0, SHOWN - 1));
+  const FIELDS = 'input,textarea,select,[role="combobox"],[role="spinbutton"],'
+    + '[contenteditable=""],[contenteditable="true"]';
+  const NOT_A_VALUE = ['checkbox', 'radio', 'file', 'hidden', 'button', 'submit', 'reset', 'image'];
+
+  // The largest ancestor holding this control and no other of its name: its row. `before`/`after`
+  // are its same-named neighbours in document order within its own tree -- the controls an
+  // ancestor holds form one contiguous run of that order, so an ancestor holding any other holds
+  // a neighbour. Never the page itself.
+  const rowOf = (e, before, after) => {
+    const doc = e.ownerDocument;
+    let best = null;
+    for (let a = e.parentElement, up = 0; a && up < CONTEXT_UP; a = a.parentElement, up += 1) {
+      if (a === doc.body || a === doc.documentElement) break;
+      if ((before && a.contains(before)) || (after && a.contains(after))) break;
+      best = a;
+    }
+    return best;
+  };
+
+  // Cut `part` out of `text` once, where it stands as its own word: a control named "a" must not
+  // take the letter out of every word of its row.
+  const WORD = /[\p{L}\p{N}]/u;
+  const cutOnce = (text, part) => {
+    if (!part || !text) return text;
+    for (let at = text.indexOf(part); at >= 0; at = text.indexOf(part, at + 1)) {
+      const end = at + part.length;
+      const leftOk = at === 0 || !WORD.test(part[0]) || !WORD.test(text[at - 1]);
+      const rightOk = end === text.length || !WORD.test(part[part.length - 1]) || !WORD.test(text[end]);
+      if (leftOk && rightOk) return clean(text.slice(0, at) + ' ' + text.slice(end));
+    }
+    return text;
+  };
+
+  // A row, described by what an `innerText` misses: its fields' values ("Where to? Osaka KIX"),
+  // then its remaining text. The control's own name and value are not repeated -- the table
+  // already shows them. Secret values are never read.
+  const describeRow = (row, e, memo) => {
+    let text = scopeText(row, memo);
+    const drop = s => { text = cutOnce(text, s); };
+    drop(clean(e.innerText));
+    const parts = [];
+    for (const f of row.querySelectorAll(FIELDS)) {
+      if (f === e || f.contains(e) || e.contains(f)) continue;
+      if (f.tagName === 'INPUT' && NOT_A_VALUE.includes(typeOf(f))) continue;
+      if (f.parentElement && f.parentElement.isContentEditable) continue;
+      if (!deepVisible(f)) continue;
+      // A div combobox or contenteditable shows its value as text: say it once, as a field.
+      if (!['INPUT', 'TEXTAREA', 'SELECT'].includes(f.tagName)) drop(clean(f.innerText));
+      if (parts.length >= 4 || isSecretField(f)) continue;
+      const value = clean(f.tagName === 'SELECT'
+        ? [...f.selectedOptions].map(o => o.label).join(', ') : valueOf(f)).slice(0, 40);
+      if (!value) continue;
+      const name = clean(nameOf(f)).slice(0, 40);
+      parts.push(name && name !== value ? name + ' ' + value : value);
+    }
+    if (text) parts.push(text);
+    return clean(parts.join(' | ')).slice(0, 120);
+  };
+
+  // Context for one group of same-role, same-name controls. The row or card a control sits in
+  // (`scopeOf`) is used as before whenever its text tells this one apart. When it does not --
+  // empty (an input's wrapper has no text), or shared (the whole form) -- the control's own row
+  // is described instead; and a control that still matches another, or has nothing at all, gets
+  // its position: "(2 of 3)".
+  const contextOf = (group, memo) => {
+    const nodes = group.map(b => S.nodes.get(b.node));
+    const tally = list => list.reduce((m, s) => m.set(shown(s), (m.get(shown(s)) || 0) + 1), new Map());
+    const unique = (m, s) => !!s && m.get(shown(s)) === 1;
+    const base = nodes.map(e => scopeText(scopeOf(e), memo).slice(0, 120));
+    const baseCount = tally(base);
+    const before = [], after = [], byRoot = new Map();
+    nodes.forEach((e, i) => {
+      const root = e.getRootNode();
+      if (!byRoot.has(root)) byRoot.set(root, []);
+      byRoot.get(root).push(i);
+    });
+    for (const run of byRoot.values()) {
+      // Document order, which the neighbour argument in `rowOf` rests on.
+      run.sort((a, b) => (nodes[a].compareDocumentPosition(nodes[b]) & 2 ? 1 : -1));
+      run.forEach((i, j) => { before[i] = nodes[run[j - 1]]; after[i] = nodes[run[j + 1]]; });
+    }
+    const out = nodes.map((e, i) => {
+      if (unique(baseCount, base[i])) return base[i];
+      const row = rowOf(e, before[i], after[i]);
+      return (row && describeRow(row, e, memo)) || base[i];
+    });
+    const outCount = tally(out);
+    group.forEach((b, i) => {
+      if (unique(outCount, out[i])) { b.context = out[i]; return; }
+      const place = '(' + (i + 1) + ' of ' + group.length + ')';
+      b.context = clean(out[i].slice(0, SHOWN - place.length - 1) + ' ' + place);
+    });
+  };
+
   const textOf = max => {
     const words = [];
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
@@ -508,15 +635,18 @@
     }
 
     // Context only where a label repeats — shipping it unconditionally is waste.
+    // Read only here: `innerText` forces layout, and reading it for every candidate was a
+    // tenth of a read on a large page to fill a field that most elements then discarded.
+    const groups = new Map();
     for (const b of built) {
       const key = b.role + '\u0000' + b.name.toLowerCase();
-      // Read only here: `innerText` forces layout, and reading it for every candidate was a
-      // tenth of a read on a large page to fill a field that most elements then discarded.
       if ((count.get(key) || 0) > 1) {
-        const scope = scopeOf(S.nodes.get(b.node));
-        b.context = clean(scope ? scope.innerText : '').slice(0, 120);
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(b);
       }
     }
+    const memo = new Map();
+    for (const group of groups.values()) contextOf(group, memo);
 
     // Truncate by usefulness, then restore document order for readability, so
     // hitting the cap never drops the form in favour of forty footer links.
