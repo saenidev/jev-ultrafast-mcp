@@ -265,3 +265,18 @@ def test_field_shows_matches_the_value_or_the_rest_of_the_name_and_needs_both_ke
     assert not passed({"type": "field_shows", "name": "Where from?", "value": "from"}, elements=elements)
     assert not passed({"type": "field_shows", "name": "Where from?"}, elements=elements)
     assert not passed({"type": "field_shows", "name": "Nowhere", "value": "x"})
+
+
+def test_text_contains_sees_result_lists_below_the_fold_in_element_names():
+    """Measured on Google Flights: 'US dollars' was only in the result links' names (below the
+    viewport), so a planner check for it failed on a page full of prices."""
+    obs = Observation(url="https://x.test/", title="t", text="Top of page",
+                      elements=[Element(ref="e1", role="link", name="From 198 US dollars. Nonstop"),
+                                Element(ref="e2", role="textbox", name="Card number", value="4111",
+                                        secret=True)],
+                      digest="", text_digest="", page_key="k", scroll={"y": 0}, reachable=2,
+                      omitted=0, overlays=[], cross_frames=0, cross_frame_srcs=[])
+    ok = assertions.run([{"type": "text_contains", "text": "US dollars"}], obs)
+    assert ok["pass"], ok
+    secret = assertions.run([{"type": "text_contains", "text": "4111"}], obs)
+    assert not secret["pass"], "a secret field's value must never satisfy a check"

@@ -12,6 +12,7 @@ from __future__ import annotations
 import atexit
 import inspect
 import json
+import re
 import time
 
 from mcp.server import MCPServer
@@ -388,18 +389,16 @@ def run_click_best(session: str, spec: dict) -> str:
         tab = _session(session)
         if tab.last is None:
             tab.observe()
-        choice = None
-        try:
-            choice = browser_mod.best_candidate(tab.last, spec or {})
-        except ValueError:
-            pass  # the op reports the same refusal below
         payload = tab.act([{**(spec or {}), "op": "click_best"}], stop_on_error=True,
                           observe_after=True)
         step = payload["ops"][0]
-        if step.get("ok") and choice is not None and choice["element"] is not None:
-            head = (f"click_best: ok ref={step.get('ref')} "
-                    f"number={browser_mod._number_text(choice['number'])} "
-                    f"candidates={choice['candidates']} covered={choice['covered']} "
+        # The numbers come from the step: the op may re-read the page wider than `tab.last` was
+        # (candidates beyond the table cap), so a choice computed here beforehand could disagree.
+        chosen = re.search(r"number=(\S+) among (\d+) candidates(?: \((\d+) covered)?",
+                           step.get("detail") or "")
+        if step.get("ok") and chosen:
+            head = (f"click_best: ok ref={step.get('ref')} number={chosen.group(1)} "
+                    f"candidates={chosen.group(2)} covered={chosen.group(3) or 0} "
                     f"target={json.dumps((step.get('target') or '')[:120], ensure_ascii=False)}")
         else:
             head = (f"click_best: failed error={step.get('error') or 'unknown'} "

@@ -187,3 +187,20 @@ def test_run_click_best_reports_a_refusal_on_its_first_line(manager, monkeypatch
 def test_click_best_is_documented_in_browser_act():
     doc = server.browser_act.__doc__ or ""
     assert "click_best" in doc and "min_number" in doc and "number_regex" in doc
+
+
+def test_candidates_beyond_the_table_cap_are_still_compared(manager):
+    """Measured on Google Flights' full results: 243 'Flight details' buttons outranked the result
+    links for the 250-element table, every link was omitted, and the pick found no candidates."""
+    buttons = "".join(f'<button type=button>Flight details {i}</button>' for i in range(300))
+    flights = "".join(_flight(i, p) for i, p in enumerate(["540", "377", "1,015", "198", "260"]))
+    session = manager.start("best-cap", "data:text/html," + quote(_page(buttons + flights)))
+    observation = session.observe()
+    assert observation.omitted, "the page must overflow the table for this test to mean anything"
+    assert not any("US dollars" in e.name for e in observation.elements), "links must be omitted"
+
+    step = _best(session, name_regex="^From [0-9,]+ US dollars", key="min_number")
+
+    assert step["ok"], step
+    assert session.evaluate_js("document.title") == "PICKED 3", step
+    assert "5 candidates" in step["detail"], step

@@ -164,10 +164,12 @@ confident of, r an ARIA role. Use [] when nothing is reliable.
 - p (pick): for "cheapest / most expensive / lowest / highest / shortest / longest" do NOT ask \
 Jev. Emit {"g":"Pick the cheapest flight","c":[],"n":1,"p":{"r":role,"re":regex on the element \
 name,"k":"min"|"max","nr":regex whose group 1 is the number}}; code clicks the matching element \
-with the lowest/highest number. First make sure the whole list is shown (a subgoal like Click the \
-"View more flights" button when the list is partial). Example, result links named "From 198 US \
-dollars. 1 stop flight ...": "p":{"r":"link","re":"^From [0-9,]+ US dollars","k":"min",\
-"nr":"From ([0-9,]+)"}.
+with the lowest/highest number. The pick compares every \
+matching element on the whole page, including ones not in your element list, so pick right after \
+the results appear: no scrolling or "View more" subgoal is needed first. Example, result links \
+named "From 198 US dollars. 1 stop flight ...": "p":{"r":"link","re":"^From [0-9,]+ US dollars",\
+"k":"min","nr":"From ([0-9,]+)"}. Pick the result LINKS carrying the price, never "Flight details" \
+buttons. After a pick, the next screen may be a new results list (the next leg): pick again.
 - fin: true when completing every sg completes the task and nothing is left to read from the \
 final page; false when you must see the final page to answer.
 - done=true only when the page already shows the task complete or it cannot proceed (login wall, \

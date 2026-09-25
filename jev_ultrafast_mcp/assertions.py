@@ -111,7 +111,12 @@ def _one(kind: str, check: dict, observation: Observation, allow_js: bool, eval_
         needle = _needle(check, "text")
         if not needle:
             return _fail(kind, f"{kind} needs a non-empty 'text'")
-        haystack = observation.text or ""
+        # Page text is what is in the viewport; a results list below the fold is only in the element
+        # names ("From 198 US dollars ..."). Measured on Google Flights: planner checks for
+        # "US dollars" failed on a results page that was full of them. Secret fields' values are
+        # masked in the observation already, so names and values add nothing a check may not see.
+        haystack = "\n".join([observation.text or ""] + [
+            f"{e.name} {e.value or ''}" for e in observation.elements if not getattr(e, "secret", False)])
         found = needle.lower() in haystack.lower()
         if check.get("regex"):
             found = bool(re.search(needle, haystack, re.IGNORECASE))
