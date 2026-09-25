@@ -26,7 +26,7 @@
   // satisfied, the server re-injected this whole file on every observation, and
   // a page holding the older helper was never actually upgraded, because the
   // early return fired on the number it already carried.
-  const VERSION = 16;
+  const VERSION = 17;
   try { if (W !== W.top) return; } catch (_) { return; }
   if (W.__jevMcp && W.__jevMcp.version === VERSION) return;
 
@@ -367,8 +367,9 @@
   };
 
   // How far above a repeated control the walk for its own row may go. Bounded: each level is two
-  // `contains` calls, so a page of 400 repeated rows stays linear.
-  const CONTEXT_UP = 8;
+  // `contains` calls, so a page of 400 repeated rows stays linear. Measured on Google Flights: a
+  // multi-city Departure input sits 10 wrappers below its row, so 8 gave every one "(1 of 3)".
+  const CONTEXT_UP = 16;
   // What the table shows of a context (`observe.py` cuts at 100): uniqueness is judged on that.
   const SHOWN = 100;
   const shown = s => (s.length <= SHOWN ? s : s.slice(0, SHOWN - 1));

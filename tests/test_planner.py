@@ -890,3 +890,23 @@ def test_a_prefixed_rail_refusal_from_a_pick_blocks_the_task(monkeypatch):
     fake = FakePlanner([first])
     monkeypatch.setattr(planner, "_http", fake)
     assert _run(world, fake)["status"].startswith("blocked: needs confirmation")
+
+
+# Measured on Google Flights multi-city: Jev reliably picks a repeated field named by its position
+# ("the third Where to? field"), so that is the goal form the planner uses for repeated rows. Its
+# value must still be read straight from the goal: "third" is position, not part of the label.
+@pytest.mark.parametrize("goal, field, value", [
+    ('Type "KIX" into the third Where to? field', "Where to? Bangkok BKK", "KIX"),
+    ('Type "ICN" into the second Where from? field', "Where from? Seoul ICN", "ICN"),
+    ('Type "Thu, Oct 29, 2026" into the third Departure field', "Departure", "Thu, Oct 29, 2026"),
+    ('Type "Sat, Nov 7, 2026" into the fourth Departure field', "Departure", "Sat, Nov 7, 2026"),
+])
+def test_a_repeated_field_named_by_position_is_read_literally(goal, field, value):
+    element = Element(ref="e1", role="combobox", name=field, editable=True)
+    cfg = dataclasses.replace(Config.from_env(), typesafe_key="k")
+    assert policy.literal_for(cfg, goal, element, _obs([element])) == value
+
+
+def test_the_system_prompt_names_repeated_fields_by_position():
+    assert "Type \"KIX\" into the third Where to? field" in planner.SYSTEM
+    assert "one subgoal per" in planner.SYSTEM and "by POSITION" in planner.SYSTEM

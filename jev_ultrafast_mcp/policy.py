@@ -1124,8 +1124,11 @@ _DESCRIPTIVE = {"the", "a", "an", "your", "my", "our", "their", "his", "her", "i
                 "and", "or", "for", "to", "of", "as", "with", "from", "at", "on", "by", "if",
                 "value", "text", "name", "it", "them", "one"}
 # Words that say where, not which field.
+# Ordinals are position, not label: "the third Where to? field" names a "Where to?" box (the planner
+# names repeated multi-city rows this way because Jev picks them reliably by position).
 _FIELD_NOISE = {"the", "a", "an", "in", "into", "on", "field", "box", "input", "bar", "textbox", "then",
-                "and", "first", "next", "now", "please", "also"}
+                "and", "first", "next", "now", "please", "also",
+                "second", "third", "fourth", "fifth", "sixth", "last"}
 
 
 def literal_values(goal: str) -> list[tuple[str, str | None]]:

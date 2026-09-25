@@ -206,3 +206,28 @@ def test_four_hundred_repeated_rows_read_in_bounded_time(manager):
         timings.append(time.perf_counter() - start)
     print(f"400-row read: {[round(t * 1000) for t in timings]} ms")
     assert min(timings) < 2.0, timings
+
+
+def _deep(inner: str, depth: int) -> str:
+    return "<div>" * depth + inner + "</div>" * depth
+
+
+# Measured on live Google Flights (2026-09-26): each Departure input sits 10 wrappers below the row
+# that also holds its Where from?/Where to?. With an 8-level walk every Departure got only
+# "(1 of 3)", and Jev, asked to edit "the first row's Departure", clicked Swap and Remove instead.
+DEEP_FLIGHTS = ("<!doctype html><title>multi-city</title>" + "".join(
+    '<div class=row style="display:flex">'
+    + _deep(f'<input role=combobox aria-label="Where from?" value="{src}">', 3)
+    + _deep(f'<input role=combobox aria-label="Where to?" value="{dst}">', 3)
+    + _deep(f'<input aria-label="Departure" value="{date}">', 10)
+    + '</div>' for src, dst, date in LEGS))
+
+
+def test_departure_boxes_nested_ten_deep_still_get_their_rows_values(manager):
+    _, raw = _raw(manager, "ctx-deep-flights", DEEP_FLIGHTS)
+    departures = _contexts(raw, "textbox", "Departure")
+    assert departures == [
+        "Where from? Bangkok BKK | Where to? Seoul ICN",
+        "Where from? Seoul ICN | Where to? Osaka KIX",
+        "Where from? Osaka KIX | Where to? Bangkok BKK",
+    ], departures
