@@ -48,6 +48,8 @@ still loading. Recent WAIT actions are not evidence of loading.
 A cookie banner, consent notice, or other dialog covering the page is dismissed
 first (accept or close it); it is never by itself a reason for BLOCKED.
 Values read on earlier pages are in earlier_pages; use them.
+done_so_far lists every step already completed for this goal and the page it was
+taken on; check it before repeating a step or declaring the goal done.
 DONE requires visible evidence that ALL requirements are satisfied.
 BLOCKED means no supported operation can make progress."""
 
@@ -419,7 +421,8 @@ def _runner_up(probabilities: dict, operations: set[str]) -> str | None:
 
 
 def choose(cfg: Config, observation: Observation, goal: str, history: list[dict],
-           pages_seen: list[dict] | None = None, second_chance: bool = False) -> dict:
+           pages_seen: list[dict] | None = None, second_chance: bool = False,
+           done_so_far: list[str] | None = None) -> dict:
     """One TypeSafe request: which operation, and which target for each operation."""
     if not cfg.typesafe_key:
         raise TurboUnavailable(
@@ -494,6 +497,8 @@ def choose(cfg: Config, observation: Observation, goal: str, history: list[dict]
         # Pages this goal already visited, oldest first: what was read there (a reference
         # number, a price) is only visible here once the page has changed.
         **({"earlier_pages": pages_seen} if pages_seen else {}),
+        # Every step this goal has completed, oldest first, with the page it was taken on.
+        **({"done_so_far": done_so_far} if done_so_far else {}),
     }
     body = {"model": cfg.typesafe_model, "state": state, "questions": questions}
 

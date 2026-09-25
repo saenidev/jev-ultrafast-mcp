@@ -481,3 +481,36 @@ def test_the_goal_loop_records_what_each_submit_sent(monkeypatch):
     ]
     _out, seen = _drive(monkeypatch, tab, decisions, lambda *_a: "x")
     assert seen[1][-1].get("submitted") == "browser-use", seen[1]
+
+
+def test_every_completed_step_reaches_the_decision_with_its_page(monkeypatch):
+    """`history` holds ten steps; a checkout is twenty-five, and the first ones say what was bought."""
+    add = Element(ref="e3", role="button", name="Add to cart")
+    tab = _Tab(dataclasses.replace(_observation([add]), title="Blue Kettle"))
+    decisions = [{"operation": "CLICK", "ref": "e3", "target": "Add to cart", "confidence": 0.9}] * 12 + [
+        {"operation": "DONE", "ref": None, "confidence": 0.9}]
+    seen_done: list = []
+
+    def fake_choose(_cfg, _obs, _goal, history, **kw):
+        seen_done.append(kw.get("done_so_far"))
+        return decisions.pop(0)
+
+    monkeypatch.setattr(server.policy, "available", lambda _cfg: True)
+    monkeypatch.setattr(server.policy, "choose", fake_choose)
+    monkeypatch.setattr(server, "_session", lambda _name: tab)
+    server.browser_goal("buy things", max_steps=20)
+
+    last = seen_done[-1]
+    assert len(last) == 12, f"all twelve completed steps, not the last ten: {len(last)}"
+    assert last[0] == "click Add to cart (on: Blue Kettle)", last[0]
+    assert seen_done[0] in (None, []), "a fresh goal has done nothing yet"
+
+
+def test_done_so_far_is_sent_in_the_state(monkeypatch):
+    sent = []
+    answer = _post_with({"DONE": 1.0})
+    monkeypatch.setattr(policy, "_post", lambda _u, _k, body: sent.append(body) or answer(None, None, body))
+    cfg = dataclasses.replace(_text_cfg(), typesafe_key="k")
+    obs = _observation([Element(ref="e1", role="button", name="Go")])
+    policy.choose(cfg, obs, "g", [], done_so_far=["click Add to cart (on: Blue Kettle)"])
+    assert sent[0]["state"]["done_so_far"] == ["click Add to cart (on: Blue Kettle)"]

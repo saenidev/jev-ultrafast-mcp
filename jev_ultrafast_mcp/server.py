@@ -121,6 +121,13 @@ def _brief(observation: Observation) -> str:
             f"{observation.reachable} reachable, obs#{observation.sequence}")
 
 
+def _done_line(step, acted_on: tuple[str, str] | None) -> str:
+    """One completed step as the model reads it: `click Add to cart (on: Blue Kettle)`."""
+    title, name = acted_on or ("", "")
+    line = f"{step.op} {name or step.target or step.ref or ''}".strip()
+    return line + (f" (on: {title[:80]})" if title else "")
+
+
 def _first_read(tab) -> Observation:
     """Read a freshly opened page until it has stopped growing.
 
@@ -193,6 +200,7 @@ def _error(exc: Exception) -> str:
 
 PAGE_NOTES = 4          # pages remembered per goal
 WEAK_BLOCKED_OVERRIDES = 3  # per goal: a weak BLOCKED replaced by a near-tied action
+DONE_SO_FAR_LIMIT = 40  # completed steps sent with each decision (one short line each)
 PAGE_NOTE_CHARS = 700   # of each page's text
 
 
@@ -502,6 +510,7 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
         pages_seen: list[dict] = []
         weak_blocked_left = WEAK_BLOCKED_OVERRIDES  # see policy.WEAK_BLOCKED
         submitted_value: dict[int, str] = {}  # this run's SUBMIT steps -> the value sent
+        acted_on: dict[int, str] = {}  # this run's steps -> title of the page they were taken on
         valueless_at: dict[int, str] = {}  # this run's no-value and refused-Enter steps -> page URL
         started = time.perf_counter()
         if url:
@@ -525,9 +534,17 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
             for item, step in zip(history, tab.history[run_start:][-10:]):
                 if id(step) in submitted_value:
                     item["submitted"] = submitted_value[id(step)]
+            # `history` is the last ten steps; a checkout is twenty-five. Measured: once "Add to
+            # cart" on the kettle's page scrolled out of it, the model re-added the kettle or went
+            # to checkout without the board. So every step this goal completed goes along too,
+            # one short line each, with the page it happened on -- "Add to cart" alone does not
+            # say which product.
+            done_so_far = [_done_line(step, acted_on.get(id(step)))
+                           for step in tab.history[run_start:] if step.ok][-DONE_SO_FAR_LIMIT:]
             try:
                 decision = policy.choose(CONFIG, observation, goal, history, pages_seen=pages_seen,
-                                         second_chance=weak_blocked_left > 0)
+                                         second_chance=weak_blocked_left > 0,
+                                         done_so_far=done_so_far)
             except policy.TurboUnavailable as exc:
                 # A provider that fails mid-run must not erase the steps already
                 # taken: those are the whole record of how far the goal got, and
@@ -597,8 +614,12 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
             if operation == "SCROLL":
                 op["dir"] = "down"
             steps += 1
+            chosen = observation.by_ref.get(decision.get("ref") or "")
+            acting_on = (observation.title, (chosen.name if chosen else "") or decision.get("target") or "")
             payload = tab.act([op], stop_on_error=False, observe_after=True)
             step_result = payload["ops"][0]
+            if tab.history:
+                acted_on[id(tab.history[-1])] = acting_on
             error = step_result.get("error") or ""
             # The guard refusing a stale ref is right; believing it was fatal is
             # what stopped the goal. Without this the same goal succeeds or fails
