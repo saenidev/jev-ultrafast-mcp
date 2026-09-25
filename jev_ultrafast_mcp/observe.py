@@ -29,6 +29,9 @@ def _short(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "\u2026"
 
 
+PLAIN_TEXT_ROLES = frozenset({"textbox", "searchbox", "spinbutton"})
+
+
 @dataclass
 class Element:
     ref: str
@@ -125,6 +128,12 @@ class Element:
         elif self.role in {"combobox", "listbox"} and self.options:
             kinds.append("SELECT")
             kinds.append("CLICK")
+        elif self.editable and self.role in PLAIN_TEXT_ROLES:
+            # Clicking a plain text box only focuses it, and TYPE_TEXT already clicks it first.
+            # Measured: on a product page whose Quantity box already said 1, the model chose
+            # CLICK Quantity (target 0.61-0.69) over "Add to cart" in five of five replays and
+            # the product was never added. An editable combobox keeps CLICK: that opens its list.
+            pass
         else:
             kinds.append("CLICK")
         if self.hoverable:

@@ -69,3 +69,33 @@ def test_decisions_are_never_hedged():
     import inspect
     assert "_hedged_post" not in inspect.getsource(policy.choose), (
         "the decision request is billed per call and must stay single")
+
+
+def test_a_third_copy_goes_out_when_the_second_is_slow_too(monkeypatch):
+    monkeypatch.setattr(policy, "TEXT_HEDGE_AFTER", 0.1)
+    calls = []
+
+    def post(_u, _k, _b):
+        calls.append(time.monotonic())
+        if len(calls) < 3:
+            time.sleep(2.0)
+            return {"slow": True}
+        return {"fast": True}
+    monkeypatch.setattr(policy, "_post", post)
+    started = time.monotonic()
+    assert policy._hedged_post("u", "k", {}) == {"fast": True}
+    assert len(calls) == 3 and time.monotonic() - started < 1.0
+
+
+def test_a_decision_gateway_502_is_retried(monkeypatch):
+    statuses = iter([502, 200])
+
+    class Response:
+        def __init__(self, status):
+            self.status_code = status
+            self.is_error = status >= 400
+        def json(self):
+            return {"ok": True}
+    monkeypatch.setattr(policy.CLIENT, "post", lambda *_a, **_k: Response(next(statuses)))
+    monkeypatch.setattr(policy.time, "sleep", lambda _s: None)
+    assert policy._post("u", "k", {}) == {"ok": True}

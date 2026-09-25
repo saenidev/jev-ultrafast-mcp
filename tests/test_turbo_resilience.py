@@ -125,8 +125,11 @@ def test_a_well_formed_answer_resolves_to_a_target(monkeypatch):
     either.
     """
     monkeypatch.setattr(policy, "_post", _post_answering(_clicking))
+    # A button, not the searchbox: a plain text box is typed into, never offered for CLICK.
+    page = _observation()
+    page = dataclasses.replace(page, elements=[Element(ref="e1", role="button", name="Search")])
 
-    decision = policy.choose(_cfg(), _observation(), "search for something", [])
+    decision = policy.choose(_cfg(), page, "search for something", [])
 
     assert decision["operation"] == "CLICK"
     assert decision["ref"] == "e1"

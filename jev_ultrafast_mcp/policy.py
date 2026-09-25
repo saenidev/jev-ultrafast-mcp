@@ -50,13 +50,18 @@ first (accept or close it); it is never by itself a reason for BLOCKED.
 Values read on earlier pages are in earlier_pages; use them.
 done_so_far lists every step already completed for this goal and the page it was
 taken on; check it before repeating a step or declaring the goal done.
+Opening an item's page does not act on it: an item is added, saved or changed only
+once that page's own button for it (Add to cart, Save, Update) has been clicked.
 DONE requires visible evidence that ALL requirements are satisfied.
 BLOCKED means no supported operation can make progress."""
 
 TARGET_RULES = """Choose the best observed target, assuming the operation named in this
 question is the one that will execute. Use the whole goal, field values, nearby
 context, and recent actions. Do not choose a field that already holds the
-requested value. Choose only an offered element ref."""
+requested value. On an item's own page, the button that adds, saves or applies
+this item comes before navigating away (to the cart, checkout or another page),
+unless done_so_far shows that button was already clicked on this item's page.
+Choose only an offered element ref."""
 
 TEXT_VALUE = """Return a JSON object with exactly one key, "text": the exact string to
 enter in the selected field. Infer it from the goal and the field's meaning.
@@ -231,13 +236,19 @@ def _http_reason(status: int) -> str:
     return f"Decision model returned HTTP {status}; no action executed."
 
 
+# Measured: two long-horizon attempts ended on a single "HTTP 502" from the decision gateway, with
+# nothing executed. 502/504 from a gateway mean the request never reached the model, so trying
+# again is as safe as for 503. A decision request itself changes nothing on the page.
+RETRY_STATUSES = frozenset({429, 502, 503, 504, 529})
+
+
 def _post(url: str, key: str, body: dict) -> object:
     for attempt in range(3):
         try:
             response = CLIENT.post(url, json=body, headers={"Authorization": f"Bearer {key}"})
         except httpx.HTTPError:
             raise TurboUnavailable("Decision model unreachable; no action executed.") from None
-        if response.status_code in {429, 529, 503} and attempt < 2:
+        if response.status_code in RETRY_STATUSES and attempt < 2:
             time.sleep(0.5 * 2 ** attempt)
             continue
         if response.is_error:
@@ -545,6 +556,7 @@ def choose(cfg: Config, observation: Observation, goal: str, history: list[dict]
     decision["ref"] = element.ref
     decision["target"] = element.name
     decision["target_confidence"] = target_answer["confidence"]
+    decision["target_probabilities"] = target_answer["probabilities"]
     if operation == "SELECT" and element.options:
         decision["value"] = _pick_option(cfg, element, goal, observation) or element.options[0].get("value")
     return decision
@@ -607,7 +619,8 @@ def _no_text_route(cfg: Config) -> str:
 # whichever answers first, removes that tail. Only for the text helper: its requests are
 # idempotent reads (a value to type), unlike a decision, and the configured model is free.
 TEXT_HEDGE_AFTER = float(os.environ.get("JEVMCP_TEXT_HEDGE_AFTER", "3.0"))
-_HEDGE_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="text-hedge")
+TEXT_HEDGE_EXTRA = 1  # copies beyond the second, each after another TEXT_HEDGE_AFTER
+_HEDGE_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=6, thread_name_prefix="text-hedge")
 
 
 def _hedged_post(url: str, key: str, body: dict) -> object:
@@ -618,16 +631,22 @@ def _hedged_post(url: str, key: str, body: dict) -> object:
         return first.result(timeout=TEXT_HEDGE_AFTER)
     except concurrent.futures.TimeoutError:
         pass
-    second = _HEDGE_POOL.submit(_post, url, key, body)
-    pending = {first, second}
+    # Measured again after a single hedge: goals with five fields still took 33-76 s, so the
+    # second copy is sometimes slow too. A third goes out after another `TEXT_HEDGE_AFTER`.
+    pending = {first, _HEDGE_POOL.submit(_post, url, key, body)}
+    extra_left = TEXT_HEDGE_EXTRA
     error: BaseException | None = None
     while pending:
-        done, pending = concurrent.futures.wait(pending, return_when=concurrent.futures.FIRST_COMPLETED)
+        done, pending = concurrent.futures.wait(pending, timeout=TEXT_HEDGE_AFTER if extra_left else None,
+                                                return_when=concurrent.futures.FIRST_COMPLETED)
         for future in done:
             if future.exception() is None:
                 return future.result()
             error = future.exception()
-    raise error  # both failed: report the last failure, as a single request would have
+        if not done and extra_left:
+            extra_left -= 1
+            pending.add(_HEDGE_POOL.submit(_post, url, key, body))
+    raise error  # every copy failed: report the last failure, as a single request would have
 
 
 def text_for(cfg: Config, goal: str, element, observation: Observation,

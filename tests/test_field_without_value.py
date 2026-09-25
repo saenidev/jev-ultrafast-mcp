@@ -514,3 +514,21 @@ def test_done_so_far_is_sent_in_the_state(monkeypatch):
     obs = _observation([Element(ref="e1", role="button", name="Go")])
     policy.choose(cfg, obs, "g", [], done_so_far=["click Add to cart (on: Blue Kettle)"])
     assert sent[0]["state"]["done_so_far"] == ["click Add to cart (on: Blue Kettle)"]
+
+
+def test_a_plain_text_box_is_typed_into_not_clicked():
+    """Clicking a text box only focuses it; measured, the model spent the step that should have been
+    "Add to cart" on CLICK Quantity instead. An editable combobox still opens its list on click."""
+    qty = Element(ref="e3", role="spinbutton", name="Quantity", editable=True, value="1")
+    search = Element(ref="e1", role="searchbox", name="Search", editable=True)
+    combo = Element(ref="e2", role="combobox", name="City", editable=True)
+    for box in (qty, search):
+        assert "CLICK" not in box.target_kinds() and "TYPE_TEXT" in box.target_kinds()
+    assert "CLICK" in combo.target_kinds()
+    locked = Element(ref="e4", role="textbox", name="Order id", editable=False)
+    assert "CLICK" in locked.target_kinds(), "a read-only box is not typed into, so it stays clickable"
+
+
+def test_the_rules_say_opening_an_item_is_not_acting_on_it():
+    assert "Opening an item's page does not act on it" in policy.NEXT_ACTION
+    assert "done_so_far" in policy.TARGET_RULES
