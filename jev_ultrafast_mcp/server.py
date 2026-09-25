@@ -10,6 +10,7 @@ it safe to hand a browser to an autonomous agent over MCP.
 from __future__ import annotations
 
 import atexit
+import inspect
 import json
 import time
 
@@ -38,7 +39,8 @@ what this server is for.
 
 A task with several stages or pages (search, filter, pick a result, fill a
 multi-page form, report what it found) goes to browser_task(task, url): a
-planner model splits it into short checked subgoals and Jev runs each one.
+planner model plans it once as a few checked subgoals and Jev runs each one;
+if you already know the steps, pass them as `plan` and no planner is called.
 browser_goal stays the faster choice for one short intent on one page.
 
 Reading a page is not a task. browser_open / browser_observe / browser_assert
@@ -420,6 +422,7 @@ def browser_assert(checks: list[dict], session: str = "default") -> str:
       {"type": "element_exists",  "role": "button", "name": "Continue"}
       {"type": "element_gone",    "ref": "e12"}
       {"type": "value_equals",    "ref": "e7", "value": "Zurich"}
+      {"type": "field_shows",     "name": "Where from?", "value": "JFK"}  (value or name)
       {"type": "checked",         "ref": "e9", "state": true}
       {"type": "count_at_least",  "role": "link", "min": 3}
       {"type": "js",              "expr": "document.title.length > 3"}
@@ -857,8 +860,9 @@ def browser_goal(goal: str, url: str = "", session: str = "default", max_steps: 
 
 @SERVER.tool(annotations=WRITES)
 def browser_task(task: str, url: str = "", session: str = "default", max_subgoals: int = 12,
-                 max_steps_per_subgoal: int = 15, verbose: bool = False) -> str:
-    """Hand over a multi-step task: a planner splits it into checked subgoals, Jev runs each.
+                 max_steps_per_subgoal: int = 15, verbose: bool = False,
+                 plan: list[dict] | None = None) -> str:
+    """Hand over a multi-step task: a planner plans it once as checked subgoals, Jev runs each.
 
     Use this for tasks with several stages or pages -- "search flights JFK to LHR on 3 Oct,
     one way, and report the cheapest nonstop"; "fill the three-page signup wizard with ...".
@@ -866,43 +870,66 @@ def browser_task(task: str, url: str = "", session: str = "default", max_subgoal
     X"): it skips the planner and is several seconds faster.
 
     How it runs: a planner model (PLANNER_MODEL on the Anthropic Messages API) reads the task
-    and the page and writes short literal subgoals, each with deterministic checks. Jev executes
-    one subgoal at a time through browser_goal; code runs its checks; the planner revises the
-    plan after a failure, a new page, or every few subgoals. Three failed subgoals in a row stop
-    the task. The planner only writes text: it cannot confirm anything, so a pay/delete/order
-    step still stops at the confirmation rail and the task ends `blocked`.
+    and the page once and writes the whole task as a few subgoals, one per form area or screen,
+    each with deterministic checks. Jev runs each subgoal through browser_goal and it ends the
+    moment its checks pass. The planner is called again only when a subgoal fails (or the plan
+    ran out before the task was done). Three failed subgoals in a row stop the task. A Jev
+    request that errors is retried once. With no planner key, or a planner that fails on its
+    first call, the task runs as one Jev goal ("planner unavailable, ran Jev alone").
 
-    Returns the status (done / stopped: reason / blocked / error), the subgoals with pass/fail,
-    checks, steps and seconds, the answer when the task asked for information, the time split
-    (planner / Jev / page), and the final URL. `verbose` adds each subgoal's Jev trace.
+    `plan`: when you already know the steps, pass them and the planner is not called at all
+    unless one fails. Each item: {"goal": 'Where from?: type "JFK", then click the suggestion
+    "John F. Kennedy International Airport (JFK)"', "checks": [{"type": "field_shows", "name":
+    "Where from?", "value": "JFK"}], "max_steps": 6}. Write typed values as
+    `<field label>: type "<value>"`. Check types: field_shows (name = start of the field's name,
+    value = text the field shows in its value or name), text_contains, text_absent,
+    url_contains, title_matches, element_exists, element_gone (name, optional role).
+    A `pick` item clicks the element with the lowest/highest number, with no model call:
+    {"goal": "Pick the cheapest flight", "pick": {"role": "link", "name_regex": "^From [0-9,]+
+    US dollars", "key": "min_number", "number_regex": "From ([0-9,]+)"}} -- show the full list
+    first ("View more flights"). A pick at a pay/delete/remove control is refused.
 
-    Needs a decision-model key (as browser_goal) and a planner key: PLANNER_API_KEY or
+    The planner only writes text: it cannot confirm anything, so a pay/delete/order step still
+    stops at the confirmation rail and the task ends `blocked`.
+
+    Returns the status (done / stopped: reason / blocked / error), the answer when the task asked
+    for information, the cost (planner calls, Jev decisions, wall time; picks, until-hits,
+    dropped checks), each subgoal with pass/fail, and the final URL. `verbose` adds Jev traces.
+
+    Needs a decision-model key (as browser_goal); the planner key is PLANNER_API_KEY or
     ANTHROPIC_API_KEY, with PLANNER_BASE_URL for a proxy.
     """
     if not policy.available(CONFIG):
         return ("turbo_unavailable: no decision-model key is set, so Jev cannot run the subgoals. "
                 "Set TYPESAFE_API_KEY, or OPENROUTER_API_KEY with JEV_PROVIDER=openrouter.")
-    if not planner_mod.available(CONFIG):
-        return ("planner_unavailable: set PLANNER_API_KEY (or ANTHROPIC_API_KEY) and, for a proxy, "
-                "PLANNER_BASE_URL. browser_goal still works without a planner.")
     try:
         tab = _session(session)
         if url:
             tab.navigate(url)
         _first_read(tab)
         max_steps = max(1, min(int(max_steps_per_subgoal), 40))
+        # Both are added by a sibling change; feature-detected so this works with or without it.
+        takes_until = "until" in inspect.signature(browser_goal).parameters
+        click_best = globals().get("run_click_best")
 
-        def execute(goal: str, steps: int) -> str:
+        def execute(goal: str, steps: int, until: list[dict] | None = None) -> str:
             # The ordinary goal path, rails and all. `verbose` only so the trace can be read.
-            return browser_goal(goal, url="", session=session, max_steps=steps, verbose=True)
+            extra = {"until": until} if (until and takes_until) else {}
+            return browser_goal(goal, url="", session=session, max_steps=steps, verbose=True, **extra)
+
+        def pick(spec: dict) -> str:
+            try:
+                return click_best(session, spec)
+            except (ChromeLaunchError, CdpError, PageStale, SafetyError, ValueError) as exc:
+                return f"error: {_error(exc)}"
 
         def check(checks: list[dict], observation: Observation) -> dict:
             return assertions_mod.run(checks, observation, allow_js=False)
 
         report = planner_mod.run(
             CONFIG, task, observe=lambda: _session(session).observe(include_text=True),
-            execute=execute, check=check, max_subgoals=max(1, int(max_subgoals)),
-            max_steps_per_subgoal=max_steps)
+            execute=execute, check=check, pick=pick if callable(click_best) else None,
+            plan=plan, max_subgoals=max(1, int(max_subgoals)), max_steps_per_subgoal=max_steps)
         text = planner_mod.render(task, report, verbose=verbose)
         return text + "\n\n" + _view(_session(session).observe())
     except (policy.TurboUnavailable, ChromeLaunchError, CdpError, PageStale, SafetyError) as exc:

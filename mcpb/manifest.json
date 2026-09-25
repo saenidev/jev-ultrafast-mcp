@@ -68,7 +68,7 @@
     },
     {
       "name": "browser_task",
-      "description": "A multi-step task: a planner model splits it into checked subgoals, and the decision model runs each one."
+      "description": "A multi-step task: planned once as checked subgoals (or pass your own plan), the decision model runs each; pick subgoals click the cheapest/highest with no model call."
     },
     {
       "name": "browser_tabs",

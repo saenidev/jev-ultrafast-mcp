@@ -24,8 +24,8 @@ from jev_ultrafast_mcp.observe import Element, Observation
 # shipping an untested check.
 EXERCISED = frozenset({
     "url_matches", "url_contains", "title_matches", "text_contains", "text_absent",
-    "element_exists", "element_gone", "value_equals", "value_named", "checked", "count_at_least",
-    "js",
+    "element_exists", "element_gone", "value_equals", "value_named", "field_shows", "checked",
+    "count_at_least", "js",
 })
 
 ELEMENTS = [
@@ -255,3 +255,13 @@ def test_value_named_never_reads_a_secret_field_back():
 ])
 def test_value_named_without_a_name_or_value_fails(check):
     assert not passed(check, elements=NAMED)
+
+
+def test_field_shows_matches_the_value_or_the_rest_of_the_name_and_needs_both_keys():
+    combo = Element(ref="e9", role="combobox", name="Where from? New York JFK", value="New York")
+    elements = list(ELEMENTS) + [combo]
+    assert passed({"type": "field_shows", "name": "Where from?", "value": "JFK"}, elements=elements)
+    assert passed({"type": "field_shows", "name": "city", "value": "zurich"})
+    assert not passed({"type": "field_shows", "name": "Where from?", "value": "from"}, elements=elements)
+    assert not passed({"type": "field_shows", "name": "Where from?"}, elements=elements)
+    assert not passed({"type": "field_shows", "name": "Nowhere", "value": "x"})

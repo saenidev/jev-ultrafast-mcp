@@ -15,9 +15,36 @@ from .observe import Observation
 
 CHECK_TYPES = [
     "url_matches", "url_contains", "title_matches", "text_contains", "text_absent",
-    "element_exists", "element_gone", "value_equals", "value_named", "checked", "count_at_least",
-    "js",
+    "element_exists", "element_gone", "value_equals", "value_named", "field_shows", "checked",
+    "count_at_least", "js",
 ]
+
+
+def _fold(text: str | None) -> str:
+    return " ".join((text or "").split()).casefold()
+
+
+def _fields_named(observation: Observation, role: str | None, name: str):
+    """Fields whose name (or label) starts with `name`; failing that, any that contain it.
+
+    A prefix first because a combobox's accessible name carries its label *and* its current
+    choice ("Where from? New York JFK"): the label is how the field is named, the rest is what
+    it shows.
+    """
+    want = _fold(name)
+    pool = [e for e in observation.elements if role is None or e.role == role]
+    prefixed = [e for e in pool if _fold(e.name).startswith(want) or _fold(e.label).startswith(want)]
+    return prefixed or [e for e in pool if want in _fold(e.name) or want in _fold(e.label)]
+
+
+def _name_rest(element, name: str) -> str:
+    """The element's name with the field-name part taken out: what the field *shows*."""
+    have = _fold(element.name)
+    want = _fold(name)
+    if have.startswith(want):
+        return have[len(want):].strip()
+    at = have.find(want)
+    return (have[:at] + " " + have[at + len(want):]).strip() if at >= 0 else have
 
 
 def _fail(kind: str, detail: str) -> dict:
@@ -114,7 +141,7 @@ def _one(kind: str, check: dict, observation: Observation, allow_js: bool, eval_
         actual = element.value or element.current or ""
         found = str(actual) == str(expected)
         return (_ok if found else _fail)(kind, f"{ref} value={actual!r} vs expected={expected!r}")
-    if kind == "value_named":
+    if kind in {"value_named", "field_shows"}:
         # `value_equals` needs a ref, which only exists once the page has been read -- so a check
         # written before the page it applies to (a plan) cannot use it. This finds the field by
         # role and name instead. A substring match by default, case-folded: a combobox that took
@@ -122,12 +149,18 @@ def _one(kind: str, check: dict, observation: Observation, allow_js: bool, eval_
         name = _needle(check, "name")
         expected = _needle(check, "value")
         if not name or not expected:
-            return _fail(kind, "value_named needs a non-empty 'name' and 'value'")
+            return _fail(kind, f"{kind} needs a non-empty 'name' and 'value'")
         role = check.get("role") or None
         contains = check.get("contains", True)
         if isinstance(contains, str):
             contains = contains.strip().lower() not in {"false", "0", "no", "off", ""}
-        matches = observation.find(role, name)
+        # `field_shows` is the form a plan should use: the field found by the start of its name,
+        # and the expected text looked for in its value *or* in the rest of its name, since a
+        # combobox commonly shows its choice there and not as a value ("Where from? New York
+        # JFK" holds the code; its value says "New York"). `in_name` asks value_named the same.
+        in_name = kind == "field_shows" or check.get("in_name") in {True, "true", "1", 1}
+        matches = _fields_named(observation, role, name) if kind == "field_shows" \
+            else observation.find(role, name)
         if not matches:
             return _fail(kind, f"no field with role={role!r} name={name!r}")
         want = " ".join(expected.split()).casefold()
@@ -142,7 +175,13 @@ def _one(kind: str, check: dict, observation: Observation, allow_js: bool, eval_
                 if have and (want in have if contains else want == have):
                     return _ok(kind, f"{element.ref} {element.name!r} value={actual!r} "
                                      f"{'contains' if contains else 'equals'} {expected!r}")
-            seen.append(f"{element.ref} {(element.value or element.current or '')!r}")
+            if in_name:
+                rest = _name_rest(element, name)
+                if rest and (want in rest if contains else want == rest):
+                    return _ok(kind, f"{element.ref} name={element.name!r} "
+                                     f"{'contains' if contains else 'equals'} {expected!r}")
+            seen.append(f"{element.ref} {(element.value or element.current or '')!r}"
+                        + (f" name={element.name!r}" if in_name else ""))
         # A value asserted against a secret field is itself a secret; it is not echoed either.
         shown = "the expected value" if any(e.secret for e in matches) else repr(expected)
         return _fail(kind, f"{len(matches)} field(s) named {name!r}; none "
