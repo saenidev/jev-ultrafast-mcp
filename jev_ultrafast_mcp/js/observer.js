@@ -26,7 +26,7 @@
   // satisfied, the server re-injected this whole file on every observation, and
   // a page holding the older helper was never actually upgraded, because the
   // early return fired on the number it already carried.
-  const VERSION = 14;
+  const VERSION = 15;
   try { if (W !== W.top) return; } catch (_) { return; }
   if (W.__jevMcp && W.__jevMcp.version === VERSION) return;
 
@@ -140,6 +140,27 @@
       element = inner;
     }
     return element;
+  };
+
+  // Whether an element the page draws with `pointer-events: none` passes its clicks through to its
+  // own row. Such an element can never be the hit: a link laid over a result row as a transparent
+  // overlay carrying the accessible name (Google Flights draws every result this way), with the
+  // real handler on its sibling. The row is its parent and nothing wider -- a hit anywhere else
+  // (a modal, a cookie banner, any other overlay) is a cover, as it is for every other element.
+  // Not when the parent is the page itself: then "inside the parent" is "anywhere", modals included.
+  const passThrough = e => {
+    let none = false;
+    try { none = e.ownerDocument.defaultView.getComputedStyle(e).pointerEvents === 'none'; } catch (_) { none = false; }
+    if (!none) return null;
+    const p = e.parentElement, doc = e.ownerDocument;
+    return p && p !== doc.body && p !== doc.documentElement ? p : null;
+  };
+  // Whether a click at the centre of `e`, which hit `hit`, lands on `e` (or on its own row, above).
+  const reaches = (e, hit) => {
+    if (!hit) return false;
+    if (hit === e || e.contains(hit) || hit.contains(e)) return true;
+    const row = passThrough(e);
+    return !!(row && row.contains(hit));
   };
 
   const roleOf = e => {
@@ -424,7 +445,7 @@
           if (lx < 0 || ly < 0 || lx >= view.innerWidth || ly >= view.innerHeight) occluded = true;
           else {
             const hit = deepElementFromPoint(doc, lx, ly);
-            occluded = !(hit && (hit === e || e.contains(hit) || hit.contains(e)));
+            occluded = !reaches(e, hit);
           }
         } catch (_) { occluded = false; }
       }
@@ -581,7 +602,7 @@
       return { ok: false, reason: 'out_of_viewport' };
     }
     const hit = deepElementFromPoint(doc, lx, ly);
-    if (!hit || !(hit === e || e.contains(hit) || hit.contains(e))) {
+    if (!reaches(e, hit)) {
       return { ok: false, reason: 'occluded' };
     }
     const off = offsetFor(frameChainOf(e));
@@ -786,8 +807,26 @@
     return [...new Set([...found].flatMap(pressNames))];
   };
   const submitters = ref => submittersOf(nodeFor(ref));
+  // A pass-through overlay (see `passThrough`) is clicked where it is drawn, so the click presses
+  // whatever of its row lies under its centre: an overlay named "Continue" over a button named
+  // "Delete account" deletes the account. Read from geometry, not a hit test, so it holds before
+  // `act` has scrolled the ref into view. The tripwire (`arm`) still watches the click itself.
+  const underneath = e => {
+    const row = passThrough(e);
+    if (!row) return [];
+    const r = e.getBoundingClientRect();
+    const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+    return deepAll(row).filter(x => x !== e && !e.contains(x) && activatable(x) && (() => {
+      const b = x.getBoundingClientRect();
+      return cx >= b.left && cx <= b.right && cy >= b.top && cy <= b.bottom;
+    })());
+  };
   // Every name one control goes by (accessible name, visible text, value, alt), for the click rail.
-  const pressNamesOf = ref => { const e = nodeFor(ref); return e && e.isConnected ? pressNamesUp(e) : null; };
+  const pressNamesOf = ref => {
+    const e = nodeFor(ref);
+    if (!e || !e.isConnected) return null;
+    return [...new Set([...pressNamesUp(e), ...underneath(e).flatMap(pressNamesUp)])];
+  };
   // Whether `type` may write into this ref. Clicking is what `type` does first, so a `type` aimed at
   // a button is a click that the click rail never saw.
   const editable = ref => {
