@@ -448,6 +448,14 @@ context that tells them apart:
 + e18  btn    Select  @Zurich → Anywhere Option 2 · 1 adult · nonstop Select
 ```
 
+Fields have no text of their own, so a row of inputs is described by its other fields' values
+(never a secret one's), and a control nothing else distinguishes gets its position:
+
+```
+e9   inp*   Departure ▸ "Thu, Oct 15"  @Where from? Seoul ICN | Where to? Osaka KIX
+e2   inp*   Note ▸ ""  @(2 of 3)
+```
+
 And a ref that no longer points at anything is refused, with a reason instead of a wrong click:
 
 ```json
